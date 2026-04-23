@@ -881,7 +881,7 @@ def parse_drives_xml(content: str) -> list:
         root = ET.fromstring(content)
         for d in root.iter():
             if d.tag.endswith('}Drive') or d.tag == 'Drive':
-                props = d.find('.//{*}Properties') or d.find('Properties')
+                _p = d.find('.//{*}Properties'); props = _p if _p is not None else d.find('Properties')
                 if props is None:
                     props = d
                 path   = _xml_attr(props, 'path', 'uncPath', 'Path')
@@ -908,7 +908,7 @@ def parse_shortcuts_xml(content: str) -> list:
         root = ET.fromstring(content)
         for s in root.iter():
             if s.tag.endswith('}Shortcut') or s.tag == 'Shortcut':
-                props = s.find('.//{*}Properties') or s.find('Properties')
+                _p = s.find('.//{*}Properties'); props = _p if _p is not None else s.find('Properties')
                 if props is None:
                     props = s
                 name       = _xml_attr(props, 'name', 'shortcutPath')
@@ -936,7 +936,7 @@ def parse_scheduledtasks_xml(content: str) -> list:
         for t in root.iter():
             tag = t.tag.split('}')[-1] if '}' in t.tag else t.tag
             if tag in ('ScheduledTask', 'ImmediateTask', 'TaskV2', 'ImmediateTaskV2'):
-                props = t.find('.//{*}Properties') or t.find('Properties')
+                _p = t.find('.//{*}Properties'); props = _p if _p is not None else t.find('Properties')
                 if props is None:
                     props = t
                 name    = _xml_attr(props, 'name', 'runAs')
@@ -1023,7 +1023,7 @@ def parse_groups_xml(content: str) -> list:
         root = ET.fromstring(content)
         for g in root.iter():
             if g.tag.endswith('}Group') or g.tag == 'Group':
-                props = g.find('.//{*}Properties') or g.find('Properties')
+                _p = g.find('.//{*}Properties'); props = _p if _p is not None else g.find('Properties')
                 if props is None:
                     props = g
                 name    = _xml_attr(props, 'groupName', 'name')
@@ -1051,7 +1051,7 @@ def parse_envvars_xml(content: str) -> list:
         root = ET.fromstring(content)
         for e in root.iter():
             if e.tag.endswith('}EnvironmentVariable') or e.tag == 'EnvironmentVariable':
-                props = e.find('.//{*}Properties') or e.find('Properties')
+                _p = e.find('.//{*}Properties'); props = _p if _p is not None else e.find('Properties')
                 if props is None:
                     props = e
                 name   = _xml_attr(props, 'name', 'Name')
@@ -1437,8 +1437,8 @@ def detect_gpo_conflicts(gpos: list) -> list:
             continue
 
         # Récupérer toutes les valeurs distinctes
-        values = list({e['value'] for e in unique_entries})
-        if len(values) < 2:
+        conflict_values = list({e['value'] for e in unique_entries})
+        if len(conflict_values) < 2:
             continue   # Même valeur dans toutes les GPO → redondance, pas conflit
 
         # Identifier la GPO gagnante (dernière dans la liste = priorité haute dans build_rsop)
@@ -1468,19 +1468,19 @@ def detect_gpo_conflicts(gpos: list) -> list:
         section_label = section_labels.get(section, section)
 
         conflicts.append({
-            'section':       section,
-            'section_label': section_label,
-            'key':           key,
-            'key_short':     key_short,
-            'severity':      severity,
-            'is_security':   is_security,
-            'values':        values,
-            'entries':       unique_entries,
-            'winner':        winner,
-            'losers':        losers,
-            'enforced_wins': bool(enforced_entries),
-            'gpo_count':     len(unique_entries),
-            'label':         f"{section_label} → {key_short}",
+            'section':         section,
+            'section_label':   section_label,
+            'key':             key,
+            'key_short':       key_short,
+            'severity':        severity,
+            'is_security':     is_security,
+            'conflict_values': conflict_values,
+            'entries':         unique_entries,
+            'winner':          winner,
+            'losers':          losers,
+            'enforced_wins':   bool(enforced_entries),
+            'gpo_count':       len(unique_entries),
+            'label':           f"{section_label} → {key_short}",
         })
 
     # Trier : sécurité d'abord, puis nombre de GPO en conflit
@@ -3387,7 +3387,7 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
       <div style="margin-bottom:12px">
         <div style="font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Valeurs en conflit</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
-          {% for v in c.values %}
+          {% for v in c.conflict_values %}
           <span style="font-size:12px;padding:4px 10px;border-radius:6px;font-family:'DM Mono';
                        background:{% if v == c.winner.value %}var(--green-dim){% else %}var(--red-dim){% endif %};
                        color:{% if v == c.winner.value %}var(--green){% else %}var(--red){% endif %};
