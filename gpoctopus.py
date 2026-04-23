@@ -1467,17 +1467,24 @@ def detect_gpo_conflicts(gpos: list) -> list:
         }
         section_label = section_labels.get(section, section)
 
+        # Alléger winner/losers — garder uniquement les champs affichés dans le HTML
+        def _slim(e):
+            return {
+                'gpo_name': e['gpo_name'],
+                'gpo_guid': e['gpo_guid'],
+                'value':    e['value'],
+                'enforced': e['enforced'],
+            }
+
         conflicts.append({
             'section':         section,
             'section_label':   section_label,
             'key':             key,
             'key_short':       key_short,
-            'severity':        severity,
             'is_security':     is_security,
             'conflict_values': conflict_values,
-            'entries':         unique_entries,
-            'winner':          winner,
-            'losers':          losers,
+            'winner':          _slim(winner),
+            'losers':          [_slim(l) for l in losers],
             'enforced_wins':   bool(enforced_entries),
             'gpo_count':       len(unique_entries),
             'label':           f"{section_label} → {key_short}",
@@ -1546,18 +1553,15 @@ def build_search_index(gpos: list) -> list:
     }
 
     def _add(gpo, type_, icon, key, value, context=''):
-        blob = ' '.join(filter(None, [
-            gpo['name'], type_, key, value, context
-        ])).lower()
+        # search_blob est construit côté JS au premier chargement — pas besoin de le sérialiser
         index.append({
-            'gpo_name':    gpo['name'],
-            'gpo_guid':    gpo['guid'],
-            'type':        type_,
-            'type_icon':   icon,
-            'key':         key,
-            'value':       str(value) if value is not None else '',
-            'context':     context,
-            'search_blob': blob,
+            'gpo_name':  gpo['name'],
+            'gpo_guid':  gpo['guid'],
+            'type':      type_,
+            'type_icon': icon,
+            'key':       key,
+            'value':     str(value) if value is not None else '',
+            'context':   context,
         })
 
     for gpo in gpos:
@@ -2885,8 +2889,9 @@ def analyze_gpos(gpos: list) -> dict:
                         and rsop_regval.get(r['regval_key'].lower())]
 
     # 2. Par GPO → uniquement les paramètres explicitement mal configurés dans cette GPO
-    gpo_reports = []
-    orphan_gpos = []
+    gpo_reports       = []
+    orphan_gpos       = []
+    gpo_content_index = {}   # guid → content_sections, chargé à la demande
     for gpo in gpos:
         if not gpo['links']:
             orphan_gpos.append(gpo['name'])
@@ -2903,21 +2908,24 @@ def analyze_gpos(gpos: list) -> dict:
 
         # Préparer le contenu lisible de la GPO
         content_sections = _format_gpo_content(gpo)
+        has_content = any(s['params'] for s in content_sections)
 
         gpo_reports.append({
-            'name': gpo['name'],
-            'guid': gpo['guid'],
-            'links': gpo['links'],
+            'name':       gpo['name'],
+            'guid':       gpo['guid'],
+            'links':      gpo['links'],
             'link_count': len(gpo['links']),
-            'flags': gpo.get('flags', '0'),
-            'created': gpo.get('created', ''),
-            'changed': gpo.get('changed', ''),
-            'findings': per_gpo_findings,
-            'score': score,
-            'is_orphan': not gpo['links'],
-            'content': content_sections,
-            'has_content': any(s['params'] for s in content_sections),
+            'flags':      gpo.get('flags', '0'),
+            'created':    gpo.get('created', ''),
+            'changed':    gpo.get('changed', ''),
+            'findings':   per_gpo_findings,
+            'score':      score,
+            'is_orphan':  not gpo['links'],
+            'has_content': has_content,
+            # content est exclu ici — chargé à la demande via gpo_content_index
         })
+        # Index de contenu séparé — chargé uniquement quand on ouvre une GPO
+        gpo_content_index[gpo['guid']] = content_sections
 
     # 3. Redondances (même paramètre dans plusieurs GPO)
     param_seen = {}
@@ -3026,13 +3034,14 @@ def analyze_gpos(gpos: list) -> dict:
         'redundant_params': dict(list(redundant.items())[:15]),
         'true_duplicates': true_duplicates[:50],
         'gpo_conflicts': gpo_conflicts,
-        'conflicts_high': conflicts_high,
-        'conflicts_low':  conflicts_low,
-        'gpo_reports': sorted(gpo_reports, key=lambda g: g['score']),
-        'all_findings': global_findings,
-        'generated_at': datetime.now().strftime('%d/%m/%Y %H:%M'),
-        'gpo_count':     len(gpos),
-        'search_index':  build_search_index(gpos),
+        'conflicts_high':    conflicts_high,
+        'conflicts_low':     conflicts_low,
+        'gpo_reports':       sorted(gpo_reports, key=lambda g: g['score']),
+        'gpo_content_index': gpo_content_index,
+        'all_findings':      global_findings,
+        'generated_at':      datetime.now().strftime('%d/%m/%Y %H:%M'),
+        'gpo_count':         len(gpos),
+        'search_index':      build_search_index(gpos),
     }
 
 
@@ -3814,29 +3823,41 @@ let _gpos = [];
 const CAT_ICONS={'sécurité':'🔒','imprimantes':'🖨','lecteurs':'💾','raccourcis':'🔗','tâches':'⏰','scripts':'📜','groupes':'👥','vars env':'⚙','services':'🔧','audit avancé':'🔍','registre XML':'📋','fichiers':'📁','reg.machine':'🗝','reg.user':'🗝'};
 
 window.addEventListener('DOMContentLoaded', () => {
-  try { _gpos = JSON.parse(document.getElementById('gpo-json').textContent); } catch(e){}
-
-  // Masquer le loader avec délai
-  setTimeout(() => {
-    document.getElementById('loader').classList.add('done');
-    setTimeout(() => document.getElementById('loader').remove(), 400);
-  }, 600);
-
-  renderCharts();
-  renderCatGrid();
-  renderPriorities();
-  renderDashPriorities();
-  renderGPOList(_gpos);
-  renderByType();
-  renderByOU('');
-  populateCompareSelects();
-
-  // Stagger animation
-  triggerStagger();
-
-  // Restaurer thème
+  // Restaurer thème en premier — évite le flash de thème incorrect
   const saved = localStorage.getItem('gpo-theme') || 'dark';
   document.documentElement.setAttribute('data-theme', saved);
+
+  try { _gpos = JSON.parse(document.getElementById('gpo-json').textContent); } catch(e){}
+
+  // Rendu immédiat : dashboard uniquement (ce que l'utilisateur voit en premier)
+  renderCharts();
+  renderCatGrid();
+  renderDashPriorities();
+  triggerStagger();
+
+  // Masquer le loader dès que le dashboard est prêt
+  requestAnimationFrame(() => {
+    document.getElementById('loader').classList.add('done');
+    setTimeout(() => {
+      const l = document.getElementById('loader');
+      if (l) l.remove();
+    }, 400);
+  });
+
+  // Différer les rendus lourds — exécutés quand le navigateur est idle
+  const _idle = typeof requestIdleCallback !== 'undefined'
+    ? requestIdleCallback
+    : (fn) => setTimeout(fn, 100);
+
+  _idle(() => {
+    renderPriorities();
+    renderGPOList(_gpos);
+  });
+  _idle(() => {
+    renderByType();
+    renderByOU('');
+    populateCompareSelects();
+  });
 });
 
 function triggerStagger() {
@@ -3857,11 +3878,24 @@ function toggleTheme() {
 }
 
 // ── Navigation ──
+// Suivi des vues déjà initialisées (évite double-rendu)
+const _viewsReady = new Set(['dashboard']);
+
 function nav(id, el) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('view-' + id).classList.add('active');
   if (el) el.classList.add('active');
+
+  // Rendu lazy : initialiser la vue seulement à la première visite
+  if (!_viewsReady.has(id)) {
+    _viewsReady.add(id);
+    if (id === 'gpolist')     renderGPOList(_gpos);
+    if (id === 'bytype')      renderByType();
+    if (id === 'byou')        renderByOU('');
+    if (id === 'priorities')  renderPriorities();
+  }
+
   // Ré-animer les stagger items
   setTimeout(() => {
     document.querySelectorAll('#view-' + id + ' .stagger-item').forEach((el, i) => {
@@ -3963,7 +3997,7 @@ function renderCharts() {
 // ── Category grid ──
 function renderCatGrid() {
   const counts = {};
-  _gpos.forEach(g => (g.content||[]).forEach(s => {
+  _gpos.forEach(g => (_gpoContentIndex[g.guid]||[]).forEach(s => {
     const k = s.title.split('—')[0].trim().toLowerCase();
     counts[k] = (counts[k]||0) + 1;
   }));
@@ -4120,7 +4154,8 @@ function showGPODetail(guid) {
 
   if (g.has_content) {
     html += `<div class="stitle">Paramètres configurés</div>`;
-    (g.content||[]).forEach(sec => {
+    const _gContent = _gpoContentIndex[g.guid] || [];
+    _gContent.forEach(sec => {
       if (!sec.params?.length) return;
       html += `<div class="section-block">
         <div class="section-head" onclick="togSec(this)">
@@ -4157,7 +4192,7 @@ function filtByType(type) {
 }
 function renderByType() {
   const types = {};
-  _gpos.forEach(g => (g.content||[]).forEach(sec => {
+  _gpos.forEach(g => (_gpoContentIndex[g.guid]||[]).forEach(sec => {
     const k = sec.title;
     if (!types[k]) types[k] = { icon: sec.icon, gpos: [] };
     types[k].gpos.push(g);
@@ -4172,7 +4207,7 @@ function renderByType() {
         </div>
         <table class="gpo-table"><thead><tr><th>GPO</th><th>Aperçu</th><th>Modifié</th></tr></thead>
         <tbody>${gpos.map(g=>{
-          const sec = g.content.find(s=>s.title===title);
+          const sec = (_gpoContentIndex[g.guid]||[]).find(s=>s.title===title);
           const preview = sec?.params?.slice(0,3).map(p=>p.key||p.label).join(', ')||'';
           return `<tr onclick="showGPODetail('${g.guid}')">
             <td style="font-weight:500">${g.name}</td>
@@ -4241,6 +4276,13 @@ const _orphanData      = {{ data.orphan_gpos | tojson }};
 const _duplicatesData  = {{ data.true_duplicates | tojson }};
 const _conflictsData   = {{ data.gpo_conflicts | tojson }};
 const _searchIndex     = {{ data.search_index | tojson }};
+const _gpoContentIndex = {{ data.gpo_content_index | tojson }};
+
+// Construire search_blob côté client une seule fois (évite de le sérialiser dans le HTML)
+_searchIndex.forEach(item => {
+  item.search_blob = [item.gpo_name, item.type, item.key, item.value, item.context]
+    .filter(Boolean).join(' ').toLowerCase();
+});
 
 // ── Moteur de recherche global ──────────────────────────────────────────────
 let _searchTypeFilter = 'all';
