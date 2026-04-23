@@ -4297,20 +4297,25 @@ function quickSearch(q) {
 }
 
 function globalSearch(q) {
-  q = q.trim();
+  // Ne pas trimmer ici — garder les espaces pour permettre la saisie multi-mots.
+  // Le trim se fait uniquement sur les tokens lors du split.
   _lastQuery = q;
 
-  const mainInput   = document.getElementById('search-main-input');
-  const sideInput   = document.getElementById('global-search-input');
-  if (mainInput && mainInput.value !== q) mainInput.value = q;
-  if (sideInput && sideInput.value !== q) sideInput.value = q;
+  // Sync les deux champs UNIQUEMENT si la valeur est vraiment différente
+  // (évite de réinjecter une valeur trimée qui ferait sauter le curseur)
+  const mainInput = document.getElementById('search-main-input');
+  const sideInput = document.getElementById('global-search-input');
+  if (mainInput && document.activeElement !== mainInput && mainInput.value !== q) mainInput.value = q;
+  if (sideInput && document.activeElement !== sideInput && sideInput.value !== q) sideInput.value = q;
 
   const emptyState  = document.getElementById('search-empty-state');
   const resultsDiv  = document.getElementById('search-results');
   const headerDiv   = document.getElementById('search-results-header');
   const typeFilters = document.getElementById('search-type-filters');
 
-  if (!q || q.length < 2) {
+  const qTrimmed = q.trim();
+
+  if (!qTrimmed || qTrimmed.length < 2) {
     emptyState.style.display  = '';
     resultsDiv.innerHTML      = '';
     headerDiv.style.display   = 'none';
@@ -4320,7 +4325,7 @@ function globalSearch(q) {
   }
   emptyState.style.display = 'none';
 
-  const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const tokens = qTrimmed.toLowerCase().split(/\s+/).filter(Boolean);
 
   // ── Logique ET inter-catégories ─────────────────────────────────────────
   // 1 token  : ET dans la même entrée (standard)
