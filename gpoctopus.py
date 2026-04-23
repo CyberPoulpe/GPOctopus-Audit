@@ -4300,7 +4300,6 @@ function globalSearch(q) {
   q = q.trim();
   _lastQuery = q;
 
-  // Sync les deux champs
   const mainInput   = document.getElementById('search-main-input');
   const sideInput   = document.getElementById('global-search-input');
   if (mainInput && mainInput.value !== q) mainInput.value = q;
@@ -4319,112 +4318,146 @@ function globalSearch(q) {
     _searchTypeFilter = 'all';
     return;
   }
-
   emptyState.style.display = 'none';
 
-  // Tokeniser la requête (plusieurs mots = ET)
   const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
 
-  // Filtrer l'index
-  let results = _searchIndex.filter(item => {
-    const blob = item.search_blob;
-    return tokens.every(t => blob.includes(t));
+  // ── Logique ET inter-catégories ─────────────────────────────────────────
+  // 1 token  : ET dans la même entrée (standard)
+  // N tokens : ET au niveau GPO — chaque token doit matcher AU MOINS UNE
+  //            entrée dans la GPO, mais pas forcément la même.
+  //            Ex: "RDS imprimante" → GPO contenant RDS ET imprimante
+  //            (même si c'est dans deux paramètres différents)
+
+  // Étape 1 : entrées qui matchent au moins un token
+  const candidates = _searchIndex
+    .map(item => {
+      const matched = tokens.filter(t => item.search_blob.includes(t));
+      return matched.length > 0 ? { ...item, _matched: matched } : null;
+    })
+    .filter(Boolean);
+
+  // Étape 2 : grouper par GPO, union des tokens couverts
+  const byGpo = {};
+  candidates.forEach(item => {
+    if (!byGpo[item.gpo_guid]) {
+      byGpo[item.gpo_guid] = { name: item.gpo_name, guid: item.gpo_guid,
+                                items: [], covered: new Set() };
+    }
+    item._matched.forEach(t => byGpo[item.gpo_guid].covered.add(t));
+    byGpo[item.gpo_guid].items.push(item);
   });
 
-  // Appliquer le filtre par type si actif
+  // Étape 3 : ne garder que les GPO couvrant TOUS les tokens
+  let gpoGroups = Object.values(byGpo).filter(g =>
+    tokens.every(t => g.covered.has(t))
+  );
+
+  // Filtre par type
   if (_searchTypeFilter !== 'all') {
-    results = results.filter(r => r.type === _searchTypeFilter);
+    gpoGroups = gpoGroups
+      .map(g => ({ ...g, items: g.items.filter(i => i.type === _searchTypeFilter) }))
+      .filter(g => g.items.length > 0);
   }
 
-  // Construire les filtres par type disponibles
+  // Comptage par type (pour les boutons filtres)
   const typeCounts = {};
-  const allMatches = _searchIndex.filter(item =>
-    tokens.every(t => item.search_blob.includes(t))
-  );
-  allMatches.forEach(r => {
-    typeCounts[r.type] = (typeCounts[r.type] || 0) + 1;
-  });
+  gpoGroups.forEach(g => g.items.forEach(item => {
+    typeCounts[item.type] = (typeCounts[item.type] || 0) + 1;
+  }));
 
   if (Object.keys(typeCounts).length > 1) {
     typeFilters.style.display = '';
-    const typeBtnsEl = document.getElementById('search-type-btns');
-    typeBtnsEl.innerHTML = Object.entries(typeCounts)
-      .sort((a,b) => b[1]-a[1])
-      .map(([type, count]) => {
-        const item = _searchIndex.find(i => i.type === type);
-        const icon = item ? item.type_icon : '📄';
-        const active = _searchTypeFilter === type ? ' on' : '';
-        return `<button class="filter-btn${active}" onclick="setSearchType('${type.replace(/'/g,"\\'")}',this)">${icon} ${type} (${count})</button>`;
+    document.getElementById('search-type-btns').innerHTML =
+      Object.entries(typeCounts).sort((a,b) => b[1]-a[1]).map(([type, count]) => {
+        const icon = (_searchIndex.find(i => i.type === type) || {}).type_icon || '📄';
+        const on = _searchTypeFilter === type ? ' on' : '';
+        return `<button class="filter-btn${on}" onclick="setSearchType('${type.replace(/'/g,"\'")}',this)">${icon} ${type} (${count})</button>`;
       }).join('');
   } else {
     typeFilters.style.display = 'none';
   }
 
-  // Grouper par GPO
-  const byGpo = {};
-  results.forEach(r => {
-    if (!byGpo[r.gpo_guid]) {
-      byGpo[r.gpo_guid] = { name: r.gpo_name, guid: r.gpo_guid, items: [] };
-    }
-    byGpo[r.gpo_guid].items.push(r);
-  });
-
-  const gpoGroups = Object.values(byGpo);
-
   // Header
+  const totalItems = gpoGroups.reduce((a, g) => a + g.items.length, 0);
   headerDiv.style.display = '';
-  document.getElementById('search-count').textContent =
-    `${results.length} résultat${results.length > 1 ? 's' : ''}`;
+  const modeHint = tokens.length > 1
+    ? `<span style="font-size:11px;color:var(--teal);margin-left:10px"
+           title="Chaque mot doit apparaître quelque part dans la GPO — pas forcément dans le même paramètre">
+         ⊕ ET inter-catégories
+       </span>`
+    : '';
+  document.getElementById('search-count').innerHTML =
+    `${totalItems} résultat${totalItems !== 1 ? 's' : ''}${modeHint}`;
   document.getElementById('search-gpo-count').textContent =
-    `dans ${gpoGroups.length} GPO${gpoGroups.length > 1 ? '' : ''}`;
+    `dans ${gpoGroups.length} GPO`;
 
-  if (!results.length) {
+  if (!gpoGroups.length) {
+    const best = tokens
+      .map(t => ({ t, n: _searchIndex.filter(i => i.search_blob.includes(t)).length }))
+      .sort((a,b) => b.n - a.n)[0];
+    const hint = best && best.n > 0
+      ? `<div style="font-size:12px;margin-top:8px;color:var(--txt3)">
+           "<strong style="color:var(--blue)">${_escHtml(best.t)}</strong>" seul donne ${best.n} résultat${best.n>1?'s':''} —
+           aucune GPO ne contient tous les termes ensemble.
+         </div>` : '';
     resultsDiv.innerHTML = `
       <div style="text-align:center;padding:40px;color:var(--txt3)">
         <div style="font-size:32px;margin-bottom:12px">🔍</div>
-        <div style="font-size:14px">Aucun résultat pour "<strong style="color:var(--txt)">${_escHtml(q)}</strong>"</div>
-        <div style="font-size:12px;margin-top:8px">Essayez avec moins de mots ou un terme plus général</div>
+        <div style="font-size:14px">Aucune GPO ne contient "<strong style="color:var(--txt)">${_escHtml(q)}</strong>"</div>
+        ${hint}
       </div>`;
     return;
   }
 
-  // Rendu groupé par GPO
-  resultsDiv.innerHTML = gpoGroups.map(group => {
-    const items = group.items.slice(0, 50); // max 50 par GPO
-    const more  = group.items.length - items.length;
+  // Trier par pertinence (le plus d'entrées matchées en premier)
+  gpoGroups.sort((a,b) => b.items.length - a.items.length);
 
-    const rows = items.map(item => {
-      const keyHl   = _highlight(item.key,   tokens);
-      const valHl   = _highlight(item.value, tokens);
-      const ctxHl   = _highlight(item.context, tokens);
-      const typeHl  = _highlight(item.type,  tokens);
-
-      return `<tr style="cursor:default" onclick="showGPODetail('${group.guid}')">
-        <td style="padding:7px 12px;border-bottom:1px solid var(--border);width:28px;text-align:center;font-size:15px">${item.type_icon}</td>
-        <td style="padding:7px 12px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);white-space:nowrap;width:180px">${typeHl}</td>
-        <td style="padding:7px 12px;border-bottom:1px solid var(--border);font-size:13px;font-weight:500;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${keyHl}</td>
-        <td style="padding:7px 12px;border-bottom:1px solid var(--border);font-size:12px;font-family:'DM Mono';color:var(--txt2);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${valHl}</td>
-        <td style="padding:7px 12px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ctxHl}</td>
+  const renderRows = (items) => {
+    const shown = items.slice(0, 20);
+    const more  = items.length - shown.length;
+    const rows  = shown.map(item => {
+      return `<tr style="cursor:pointer" onclick="showGPODetail('${item.gpo_guid}')">
+        <td style="padding:6px 10px;border-bottom:1px solid var(--border);width:24px;text-align:center;font-size:14px">${item.type_icon}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);white-space:nowrap;width:170px">${_highlight(item.type, tokens)}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:13px;font-weight:500;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.key, tokens)}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;font-family:'DM Mono';color:var(--txt2);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.value, tokens)}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.context, tokens)}</td>
       </tr>`;
     }).join('');
+    const moreRow = more > 0
+      ? `<tr><td colspan="5" style="padding:5px 10px;font-size:11px;color:var(--txt3);font-style:italic">… ${more} entrée${more>1?'s':''} supplémentaire${more>1?'s':''}</td></tr>`
+      : '';
+    return `<table style="width:100%;border-collapse:collapse"><tbody>${rows}${moreRow}</tbody></table>`;
+  };
 
-    const moreRow = more > 0 ? `
-      <tr><td colspan="5" style="padding:6px 12px;font-size:11px;color:var(--txt3);font-style:italic">
-        … et ${more} résultat${more>1?'s':''} supplémentaire${more>1?'s':''} — ouvrez la GPO pour tout voir
-      </td></tr>` : '';
+  resultsDiv.innerHTML = gpoGroups.map(group => {
+    // En mode multi-token : séparer les résultats par token pour montrer
+    // "pourquoi cette GPO a matché chaque terme"
+    const bodyHtml = tokens.length > 1
+      ? tokens.map(t => {
+          const tItems = group.items.filter(i => i._matched.includes(t));
+          if (!tItems.length) return '';
+          return `<div style="border-top:1px solid var(--border)">
+            <div style="padding:5px 12px;background:var(--surface2);font-size:11px;color:var(--txt3)">
+              <mark style="background:rgba(91,158,249,.2);color:var(--blue);border-radius:3px;padding:1px 6px;font-weight:600">${_escHtml(t)}</mark>
+              — ${tItems.length} entrée${tItems.length>1?'s':''}
+            </div>
+            ${renderRows(tItems)}
+          </div>`;
+        }).join('')
+      : `<div style="border-top:1px solid var(--border)">${renderRows(group.items)}</div>`;
 
     return `
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden">
-        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface2);border-bottom:1px solid var(--border);cursor:pointer"
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface2);cursor:pointer"
              onclick="showGPODetail('${group.guid}')">
           <span style="font-size:14px">📄</span>
           <span style="font-size:13px;font-weight:600;flex:1">${_highlight(group.name, tokens)}</span>
-          <span style="font-size:11px;color:var(--txt3)">${group.items.length} résultat${group.items.length>1?'s':''}</span>
+          <span style="font-size:11px;color:var(--txt3)">${group.items.length} entrée${group.items.length>1?'s':''}</span>
           <span style="font-size:11px;color:var(--blue)">Ouvrir →</span>
         </div>
-        <table style="width:100%;border-collapse:collapse">
-          <tbody>${rows}${moreRow}</tbody>
-        </table>
+        ${bodyHtml}
       </div>`;
   }).join('');
 }
