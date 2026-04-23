@@ -707,6 +707,507 @@ AUDIT_RULES_REGISTRY_XML = [
 ]
 
 
+# ─── Règles d'amélioration (enhancement) ────────────────────────────────────
+# Ces règles ne signalent PAS une faille — elles proposent un durcissement
+# supplémentaire sur des paramètres déjà conformes ou non configurés.
+# Sources : ANSSI CERTFR-2020-DUR-001 (màj 04/2024), CIS Benchmarks,
+#           MS Security Baseline 2022, CERTFR-2021-DUR-001 (relais NTLM).
+# Chaque règle est vérifiable via GPO/registre — aucune hypothèse d'architecture.
+
+AUDIT_RULES_ENHANCEMENT = [
+    # ── NTLM ──────────────────────────────────────────────────────────────────
+    {
+        "id":        "ENH-NTLM-001",
+        "title":     "Audit NTLM sortant non activé sur les DC (étape 1 blocage NTLM)",
+        "severity":  "enhancement",
+        "ref":       "ANSSI CERTFR-2021-DUR-001 · CIS 2.3.11.9",
+        "category":  "Durcissement NTLM",
+        "rationale": (
+            "L'ANSSI recommande de procéder en deux phases : d'abord activer l'audit "
+            "des authentifications NTLM sortantes sur les DC (RestrictSendingNTLMTraffic = 1), "
+            "puis — après analyse des journaux — bloquer complètement (valeur 2). "
+            "Cette première étape est sans impact fonctionnel."
+        ),
+        "implementation": (
+            "GPO DC : Configuration ordinateur > Paramètres Windows > Paramètres de sécurité "
+            "> Options de sécurité > Sécurité réseau : Restreindre NTLM : Trafic NTLM sortant "
+            "vers des serveurs distants = Auditer tout. "
+            "Surveiller l'EventLog Microsoft-Windows-NTLM (Event 8001/8002) pendant 2 semaines, "
+            "puis passer à 'Refuser tout' si aucun service légitime n'utilise NTLM."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\system\\currentcontrolset\\control\\lsa\\msv1_0\\restrictsendingntlmtraffic",
+        "good_vals":  ["4,1", "4,2"],   # 1=audit, 2=blocage — les deux sont positifs
+    },
+    {
+        "id":        "ENH-NTLM-002",
+        "title":     "Restriction NTLM entrant sur les DC non configurée",
+        "severity":  "enhancement",
+        "ref":       "ANSSI CERTFR-2021-DUR-001 · CIS 2.3.11.10",
+        "category":  "Durcissement NTLM",
+        "rationale": (
+            "RestrictNTLMInDomain permet de contrôler quels serveurs du domaine "
+            "peuvent recevoir des authentifications NTLM. Positionner à 1 (audit) "
+            "puis à 7 (blocage sauf exceptions) réduit drastiquement la surface "
+            "d'attaque NTLM relay et Pass-the-Hash."
+        ),
+        "implementation": (
+            "GPO DC : Sécurité réseau : Restreindre NTLM : Authentification NTLM dans ce domaine "
+            "= Auditer tout (1). Analyser Event 8004 dans Microsoft-Windows-NTLM. "
+            "Puis passer à 'Refuser tout' (7) ou 'Refuser les comptes de domaine vers les serveurs de domaine' (3)."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\system\\currentcontrolset\\control\\lsa\\msv1_0\\restrictntlmindomain",
+        "good_vals":  ["4,1", "4,3", "4,7"],
+    },
+
+    # ── Kerberos ──────────────────────────────────────────────────────────────
+    {
+        "id":        "ENH-KERB-001",
+        "title":     "RC4 pour Kerberos non désactivé (Kerberoasting facilité)",
+        "severity":  "enhancement",
+        "ref":       "CIS 2.3.11.4 · ANSSI R-07 · MS Baseline 2022",
+        "category":  "Durcissement Kerberos",
+        "rationale": (
+            "RC4-HMAC est l'algorithme Kerberos historique, vulnérable aux attaques "
+            "Kerberoasting (extraction de TGS et crack offline). Forcer AES128+AES256 "
+            "(SupportedEncryptionTypes = 2147483640) élimine ce vecteur. "
+            "Prérequis : tous les comptes de service doivent supporter AES — vérifier "
+            "avant déploiement avec Get-ADUser -Filter * -Properties msDS-SupportedEncryptionTypes."
+        ),
+        "implementation": (
+            "GPO Domaine : Configuration ordinateur > Paramètres Windows > Paramètres de sécurité "
+            "> Options de sécurité > Sécurité réseau : Configurer les types de chiffrement "
+            "autorisés pour Kerberos = AES128_HMAC_SHA1 + AES256_HMAC_SHA1 + Future encryption types. "
+            "Valeur registre : HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\Kerberos\\Parameters "
+            "SupportedEncryptionTypes = 2147483640."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\software\\microsoft\\windows\\currentversion\\policies\\system\\kerberos\\parameters\\supportedencryptiontypes",
+        "good_vals":  ["4,2147483640", "4,2147483644"],
+    },
+    {
+        "id":        "ENH-KERB-002",
+        "title":     "Kerberos Armoring (FAST) non activé",
+        "severity":  "enhancement",
+        "ref":       "MS Security Baseline 2022 · CIS 18.9.11.1",
+        "category":  "Durcissement Kerberos",
+        "rationale": (
+            "Kerberos Armoring (FAST — Flexible Authentication Secure Tunneling) protège "
+            "les échanges AS-REQ/TGS-REQ contre l'interception et renforce la résistance "
+            "aux attaques AS-REP Roasting sur les comptes sans pré-authentification. "
+            "Requiert un niveau fonctionnel de domaine Windows Server 2012 minimum."
+        ),
+        "implementation": (
+            "GPO Domaine : Configuration ordinateur > Modèles d'administration > Système "
+            "> KDC > Prise en charge de l'armement Kerberos par les contrôleurs de domaine "
+            "= Activé (Pris en charge). "
+            "Clé : HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\KDC\\Parameters "
+            "EnableCbacAndArmor = 1."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\software\\microsoft\\windows\\currentversion\\policies\\system\\kdc\\parameters\\enablecbacandarmor",
+        "good_vals":  ["4,1"],
+    },
+
+    # ── Audit avancé ──────────────────────────────────────────────────────────
+    {
+        "id":        "ENH-AUDIT-001",
+        "title":     "Audit avancé (subcatégories) non prioritaire sur l'audit legacy",
+        "severity":  "enhancement",
+        "ref":       "CIS 17.1.1 · ANSSI R-09 · MS Baseline 2022",
+        "category":  "Audit avancé",
+        "rationale": (
+            "Les politiques d'audit avancées (audit.csv) offrent une granularité bien "
+            "supérieure à l'audit legacy (GptTmpl.inf [Event Audit]). Sans SCENoApplyLegacyAuditPolicy = 1, "
+            "les paramètres legacy peuvent écraser les sous-catégories avancées, réduisant "
+            "la visibilité sur les événements de sécurité critiques."
+        ),
+        "implementation": (
+            "GPO Domaine : Configuration ordinateur > Paramètres Windows > Paramètres de sécurité "
+            "> Stratégies locales > Options de sécurité > Audit : forcer les paramètres de "
+            "sous-catégorie de stratégie d'audit (Windows Vista ou version ultérieure) = Activé. "
+            "Clé : HKLM\\SYSTEM\\CurrentControlSet\\Control\\LSA\\SCENoApplyLegacyAuditPolicy = 1."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\system\\currentcontrolset\\control\\lsa\\scenoapplylegacyauditpolicy",
+        "good_vals":  ["4,1"],
+    },
+    {
+        "id":        "ENH-AUDIT-002",
+        "title":     "Transcription PowerShell non activée (complément du ScriptBlock Logging)",
+        "severity":  "enhancement",
+        "ref":       "CIS 18.9.100.2 · ANSSI R-09",
+        "category":  "Audit avancé",
+        "rationale": (
+            "Le ScriptBlock Logging (déjà vérifié) capture le code PowerShell. "
+            "La Transcription va plus loin : elle enregistre l'intégralité de la session "
+            "PowerShell (entrées + sorties) dans un fichier texte centralisé. "
+            "Combinés, ils permettent de reconstituer précisément les actions d'un attaquant "
+            "ou d'un script malveillant (Empire, Cobalt Strike, etc.)."
+        ),
+        "implementation": (
+            "GPO : Configuration ordinateur > Modèles d'administration > Composants Windows "
+            "> Windows PowerShell > Activer la transcription PowerShell = Activé. "
+            "Configurer un répertoire de sortie centralisé (partage réseau en écriture seule). "
+            "Clé : HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\Transcription "
+            "EnableTranscripting = 1, OutputDirectory = \\\\srv-logs\\pstranscripts."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\software\\policies\\microsoft\\windows\\powershell\\transcription\\enabletranscripting",
+        "good_vals":  ["4,1"],
+    },
+    {
+        "id":        "ENH-AUDIT-003",
+        "title":     "Module Logging PowerShell non activé",
+        "severity":  "enhancement",
+        "ref":       "CIS 18.9.100.3 · ANSSI R-09",
+        "category":  "Audit avancé",
+        "rationale": (
+            "Le Module Logging enregistre l'exécution de chaque commande PowerShell "
+            "et ses paramètres dans l'EventLog (Event ID 4103), indépendamment de l'obfuscation. "
+            "Complément du ScriptBlock Logging — certains payloads obfusqués échappent "
+            "au ScriptBlock mais sont capturés par le Module Logging."
+        ),
+        "implementation": (
+            "GPO : Configuration ordinateur > Modèles d'administration > Composants Windows "
+            "> Windows PowerShell > Activer l'enregistrement des modules = Activé. "
+            "Dans la liste des modules, entrer * pour tout capturer. "
+            "Clé : HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging "
+            "EnableModuleLogging = 1."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\software\\policies\\microsoft\\windows\\powershell\\modulelogging\\enablemodulelogging",
+        "good_vals":  ["4,1"],
+    },
+
+    # ── SMB & réseau ──────────────────────────────────────────────────────────
+    {
+        "id":        "ENH-SMB-001",
+        "title":     "Signature SMB non requise côté serveur (RequireSecuritySignature serveur)",
+        "severity":  "enhancement",
+        "ref":       "CIS 2.3.8.2 · ANSSI R-07 · MS Baseline 2022",
+        "category":  "Durcissement réseau",
+        "rationale": (
+            "La signature SMB côté serveur (LanManServer RequireSecuritySignature) garantit "
+            "l'intégrité des communications et bloque les attaques SMB relay / MITM. "
+            "Activée par défaut sur Windows Server 2022+ mais souvent désactivée pour "
+            "compatibilité NAS ou imprimantes réseau. À combiner avec RequireSecuritySignature "
+            "côté client (déjà couvert par SMB-001)."
+        ),
+        "implementation": (
+            "GPO : Configuration ordinateur > Paramètres Windows > Paramètres de sécurité "
+            "> Options de sécurité > Serveur réseau Microsoft : signer numériquement les "
+            "communications (toujours) = Activé. "
+            "Clé : HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanManServer\\Parameters "
+            "RequireSecuritySignature = 1. "
+            "Tester d'abord avec EnableSecuritySignature = 1 (si le serveur accepte) puis RequireSecuritySignature."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\system\\currentcontrolset\\services\\lanmanserver\\parameters\\requiresecuritysignature",
+        "good_vals":  ["4,1"],
+    },
+    {
+        "id":        "ENH-SMB-002",
+        "title":     "Chiffrement SMB non activé (SMB Encryption)",
+        "severity":  "enhancement",
+        "ref":       "MS Security Baseline 2022 · MS KB5040266",
+        "category":  "Durcissement réseau",
+        "rationale": (
+            "Windows Server 2022 active le chiffrement SMB par défaut pour les nouvelles "
+            "connexions. Sur les versions antérieures ou en cas de désactivation explicite, "
+            "le trafic SMB circule en clair sur le réseau, exposant les données aux "
+            "captures passives (sniffing). Le chiffrement est distinct de la signature."
+        ),
+        "implementation": (
+            "PowerShell : Set-SmbServerConfiguration -EncryptData $true -Confirm:$false. "
+            "Via GPO Registre : HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanManServer\\Parameters "
+            "EncryptData = 1 (REG_DWORD). "
+            "Attention : peut impacter les clients SMB 1/2 — vérifier la compatibilité avant déploiement."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\system\\currentcontrolset\\services\\lanmanserver\\parameters\\encryptdata",
+        "good_vals":  ["4,1"],
+    },
+
+    # ── Protection LSASS ──────────────────────────────────────────────────────
+    {
+        "id":        "ENH-LSA-001",
+        "title":     "Audit des plugins LSASS non activé (PPL audit mode)",
+        "severity":  "enhancement",
+        "ref":       "MS KB3033929 · ANSSI R-08 · MS Baseline 2022",
+        "category":  "Protection LSASS",
+        "rationale": (
+            "Avant d'activer RunAsPPL = 1 (protection complète LSASS), Microsoft recommande "
+            "d'activer le mode audit (RunAsPPL = 2 sur Windows 11 22H2+/Server 2025, "
+            "ou AuditLevel dans le registre sur les versions antérieures) pour identifier "
+            "les drivers ou plugins incompatibles. Évite un BSOD au démarrage."
+        ),
+        "implementation": (
+            "Étape 1 — Audit : GPO Registre HKLM\\SYSTEM\\CurrentControlSet\\Control\\LSA "
+            "AuditLevel = 8 (REG_DWORD) pour journaliser les drivers bloqués (Event 3065/3066). "
+            "Étape 2 — Après validation (absence d'Event 3065) : RunAsPPL = 1. "
+            "Requis : Secure Boot activé. Sur Server 2025 / Win11 22H2+ : RunAsPPL = 2 = mode audit intégré."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\system\\currentcontrolset\\control\\lsa\\runasppl",
+        "good_vals":  ["4,1", "4,2"],
+    },
+
+    # ── Durcissement authentification ─────────────────────────────────────────
+    {
+        "id":        "ENH-AUTH-001",
+        "title":     "Politique de mots de passe précis (Fine-Grained Password Policy) non détectée",
+        "severity":  "enhancement",
+        "ref":       "ANSSI R-03 · MS Baseline 2022",
+        "category":  "Mots de passe",
+        "rationale": (
+            "Les Fine-Grained Password Policies (FGPP) permettent d'appliquer des politiques "
+            "différentes selon les groupes : ex. 20 caractères minimum pour les comptes "
+            "d'administration, 14 pour les utilisateurs standards. "
+            "Non configurable via GPO classique — nécessite ADSI/PowerShell. "
+            "Absence de FGPP signifie une politique unique pour tous les comptes, "
+            "y compris les comptes de service sensibles."
+        ),
+        "implementation": (
+            "PowerShell : New-ADFineGrainedPasswordPolicy -Name 'PSO-Admins' "
+            "-Precedence 10 -MinPasswordLength 20 -PasswordHistoryCount 24 "
+            "-ComplexityEnabled $true -MaxPasswordAge (New-TimeSpan -Days 90). "
+            "Puis : Add-ADFineGrainedPasswordPolicySubject 'PSO-Admins' -Subjects 'Domain Admins'. "
+            "Note : ce contrôle ne peut pas être évalué depuis le SYSVOL — vérification manuelle recommandée."
+        ),
+        "check_type": "informational",  # Non vérifiable via GPO — conseil architectural
+    },
+    {
+        "id":        "ENH-AUTH-002",
+        "title":     "LAPS (Local Administrator Password Solution) non détecté via GPO",
+        "severity":  "enhancement",
+        "ref":       "ANSSI R-30 · CIS 18.3.2 · MS Baseline 2022",
+        "category":  "Mots de passe",
+        "rationale": (
+            "Sans LAPS, le mot de passe du compte administrateur local est souvent identique "
+            "sur tous les postes — un seul compte compromis permet un mouvement latéral "
+            "total (Pass-the-Hash, PsExec). LAPS génère et stocke automatiquement un mot "
+            "de passe unique par machine dans l'AD. Microsoft LAPS (version intégrée depuis "
+            "Windows Server 2022 / Win11 22H2) remplace l'ancienne version."
+        ),
+        "implementation": (
+            "LAPS intégré (recommandé) : activer via GPO Configuration ordinateur > "
+            "Modèles d'administration > LAPS > Configurer le compte administrateur local géré. "
+            "Ou installation manuelle : https://www.microsoft.com/en-us/download/details.aspx?id=46899. "
+            "Vérifier le déploiement : Get-ADComputer -Filter * -Properties ms-Mcs-AdmPwd | "
+            "Where-Object {$_.'ms-Mcs-AdmPwd' -ne $null}."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\software\\policies\\microsoft services\\adm pwd\\passwordcomplexity",
+        "good_vals":  ["4,1", "4,2", "4,3", "4,4"],
+    },
+
+    # ── Cloisonnement et accès distants ───────────────────────────────────────
+    {
+        "id":        "ENH-RDP-001",
+        "title":     "Mode Restricted Admin RDP non activé pour les sessions administrateurs",
+        "severity":  "enhancement",
+        "ref":       "ANSSI R-12 · MS KB2871997",
+        "category":  "Accès distant",
+        "rationale": (
+            "Sans Restricted Admin Mode, les credentials de l'administrateur sont injectés "
+            "dans la session RDP distante et restent en mémoire lsass côté serveur. "
+            "En cas de compromission du serveur, Mimikatz peut extraire ces credentials. "
+            "Restricted Admin Mode empêche l'injection des credentials — la session utilise "
+            "le ticket Kerberos machine, sans exposer le mot de passe."
+        ),
+        "implementation": (
+            "GPO : HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa DisableRestrictedAdmin = 0. "
+            "Connexion : mstsc.exe /restrictedAdmin. "
+            "Attention : incompatible avec certains scénarios (ressources réseau depuis la session RDP). "
+            "À combiner avec Protected Users group et tiering AD."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\system\\currentcontrolset\\control\\lsa\\disablerestrictedadmin",
+        "good_vals":  ["4,0"],
+    },
+    {
+        "id":        "ENH-RDP-002",
+        "title":     "Chiffrement RDP non forcé au niveau maximum",
+        "severity":  "enhancement",
+        "ref":       "CIS 18.10.56.3 · MS Baseline 2022",
+        "category":  "Accès distant",
+        "rationale": (
+            "MinEncryptionLevel = 3 (High) force le chiffrement 128 bits pour toutes "
+            "les sessions RDP. Sans ce paramètre, le client et le serveur peuvent négocier "
+            "un niveau inférieur si le client le supporte. "
+            "À combiner avec SecurityLayer = 2 (SSL/TLS obligatoire)."
+        ),
+        "implementation": (
+            "GPO : Configuration ordinateur > Modèles d'administration > Composants Windows "
+            "> Services Bureau à distance > Hôte de session Bureau à distance > Sécurité "
+            "> Définir le niveau de chiffrement de la connexion client = Élevé. "
+            "Clé : HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services "
+            "MinEncryptionLevel = 3."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\software\\policies\\microsoft\\windows nt\\terminal services\\minencryptionlevel",
+        "good_vals":  ["4,3"],
+    },
+
+    # ── Sécurité système ──────────────────────────────────────────────────────
+    {
+        "id":        "ENH-SYS-001",
+        "title":     "Windows Defender Credential Guard non configuré",
+        "severity":  "enhancement",
+        "ref":       "MS Security Baseline 2022 · ANSSI R-08 · CIS 18.9.4.1",
+        "category":  "Protection système",
+        "rationale": (
+            "Credential Guard isole les secrets NTLM et Kerberos dans un environnement "
+            "virtualisé (VSM/VBS) inaccessible au noyau principal. Même avec les droits "
+            "SYSTEM, Mimikatz ne peut plus extraire les credentials depuis lsass. "
+            "Requis : UEFI, Secure Boot, TPM 2.0, Windows Server 2016+ ou Win10 64-bit."
+        ),
+        "implementation": (
+            "GPO : Configuration ordinateur > Modèles d'administration > Système "
+            "> Device Guard > Activer la sécurité basée sur la virtualisation = Activé. "
+            "Sous-option : Credential Guard = Activé avec verrouillage UEFI (recommandé). "
+            "Clé : HKLM\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard "
+            "EnableVirtualizationBasedSecurity = 1, RequirePlatformSecurityFeatures = 3, "
+            "LsaCfgFlags = 1 (Credential Guard activé)."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\system\\currentcontrolset\\control\\deviceguard\\lsacfgflags",
+        "good_vals":  ["4,1", "4,2"],
+    },
+    {
+        "id":        "ENH-SYS-002",
+        "title":     "Protected Users security group non utilisé pour les comptes sensibles",
+        "severity":  "enhancement",
+        "ref":       "ANSSI R-08 · MS KB2871997",
+        "category":  "Protection système",
+        "rationale": (
+            "Le groupe 'Protected Users' (Windows Server 2012 R2+) applique automatiquement "
+            "des restrictions fortes sur les membres : pas de délégation Kerberos, pas de "
+            "cache credentials NTLM, pas de WDigest, TGT Kerberos limité à 4h. "
+            "Non configurable via GPO standard — contrôle informationnel recommandant "
+            "d'ajouter les comptes admin dans ce groupe."
+        ),
+        "implementation": (
+            "PowerShell : Add-ADGroupMember 'Protected Users' -Members 'Administrateur','DA-Jean.Dupont'. "
+            "Attention : tester d'abord — incompatible avec certains services (IIS avec délégation, "
+            "services Windows utilisant NTLM). "
+            "Vérifier : Get-ADGroupMember 'Protected Users'."
+        ),
+        "check_type": "informational",
+    },
+    {
+        "id":        "ENH-SYS-003",
+        "title":     "Avertissement d'expiration de session de bureau à distance trop court",
+        "severity":  "enhancement",
+        "ref":       "CIS 18.10.56.2 · MS Baseline 2022",
+        "category":  "Accès distant",
+        "rationale": (
+            "Les sessions RDP déconnectées ou inactives laissées indéfiniment ouvertes "
+            "constituent un vecteur d'attaque (hijacking de session). "
+            "Limiter la durée des sessions déconnectées à 15 minutes réduit cette surface."
+        ),
+        "implementation": (
+            "GPO : Configuration ordinateur > Modèles d'administration > Composants Windows "
+            "> Services Bureau à distance > Hôte de session Bureau à distance > Délais d'expiration "
+            "de session > Définir le délai pour les sessions déconnectées = 15 minutes. "
+            "Clé : HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services "
+            "MaxDisconnectionTime = 900000 (ms)."
+        ),
+        "check_type": "regval",
+        "regval_key": "machine\\software\\policies\\microsoft\\windows nt\\terminal services\\maxdisconnectiontime",
+        "good_vals":  ["4,900000"],
+    },
+]
+
+
+def evaluate_enhancement_rules(rsop_settings: dict, rsop_registry: dict,
+                                rsop_regval_settings: dict) -> list:
+    """
+    Évalue les règles d'amélioration (enhancement) sur le RSOP.
+    Logique inverse des règles de faille :
+      - Si le paramètre est présent ET correct → pas de suggestion
+      - Si le paramètre est absent OU incorrect → on propose l'amélioration
+    Les règles 'informational' sont toujours remontées (non vérifiables via GPO).
+    """
+    suggestions = []
+
+    for rule in AUDIT_RULES_ENHANCEMENT:
+        check_type = rule.get("check_type", "regval")
+
+        # ── Conseil architectural (non vérifiable via GPO) ──
+        if check_type == "informational":
+            suggestions.append({
+                "rule_id":        rule["id"],
+                "title":          rule["title"],
+                "severity":       "enhancement",
+                "ref":            rule["ref"],
+                "category":       rule["category"],
+                "rationale":      rule["rationale"],
+                "implementation": rule["implementation"],
+                "detail":         "Non vérifiable automatiquement via GPO — recommandation architecturale.",
+                "not_configured": True,
+                "source_gpos":    [],
+                "action_type":    "create",
+                "action_label":   "Recommandation manuelle",
+            })
+            continue
+
+        # ── Vérification via Registry Values (GptTmpl.inf [Registry Values]) ──
+        if check_type == "regval":
+            key = rule["regval_key"].lower()
+            good_vals = [v.lower().replace(" ", "") for v in rule.get("good_vals", [])]
+
+            # Chercher d'abord dans les [Registry Values] du GptTmpl.inf
+            actual = rsop_regval_settings.get(key)
+            if actual is None:
+                # Chercher dans Registry.pol
+                key_parts = key.split("\\")
+                vname = key_parts[-1] if key_parts else ""
+                hive_key = "\\".join(key_parts[:-1])
+                actual_reg = rsop_registry.get((hive_key, vname))
+                if actual_reg is not None:
+                    actual = f"4,{actual_reg}"
+
+            if actual is None:
+                # Paramètre absent du RSOP → suggérer
+                suggestions.append({
+                    "rule_id":        rule["id"],
+                    "title":          rule["title"],
+                    "severity":       "enhancement",
+                    "ref":            rule["ref"],
+                    "category":       rule["category"],
+                    "rationale":      rule["rationale"],
+                    "implementation": rule["implementation"],
+                    "detail":         "Paramètre non configuré via GPO — valeur par défaut Windows appliquée.",
+                    "not_configured": True,
+                    "source_gpos":    [],
+                    "action_type":    "create",
+                    "action_label":   "Créer une GPO de durcissement",
+                })
+            else:
+                actual_norm = actual.lower().replace(" ", "")
+                if actual_norm not in good_vals:
+                    suggestions.append({
+                        "rule_id":        rule["id"],
+                        "title":          rule["title"],
+                        "severity":       "enhancement",
+                        "ref":            rule["ref"],
+                        "category":       rule["category"],
+                        "rationale":      rule["rationale"],
+                        "implementation": rule["implementation"],
+                        "detail":         f"Valeur actuelle dans le RSOP : {actual} — durcissement supplémentaire possible.",
+                        "not_configured": False,
+                        "source_gpos":    [],
+                        "action_type":    "modify",
+                        "action_label":   "Modifier la GPO existante",
+                    })
+            continue
+
+    return suggestions
+
+
 def evaluate_registry_xml_rules(rsop_registry_xml: dict) -> list:
     """Évalue les règles sur les Registry.xml agrégés dans le RSOP."""
     findings = []
@@ -1576,10 +2077,14 @@ class GPOCollector:
         )
         gpos = []
         for entry in self.conn.entries:
+            guid = str(entry.cn) if entry.cn else ''
+            sysvol = str(entry.gPCFileSysPath) if entry.gPCFileSysPath else ''
+            if not guid:
+                continue  # GPO sans GUID — corrompue ou inaccessible
             gpos.append({
-                'name': str(entry.displayName) if entry.displayName else 'Sans nom',
-                'guid': str(entry.cn),
-                'sysvol_path': str(entry.gPCFileSysPath) if entry.gPCFileSysPath else '',
+                'name': str(entry.displayName) if entry.displayName else f'GPO-{guid[:8]}',
+                'guid': guid,
+                'sysvol_path': sysvol,
                 'version': str(entry.versionNumber) if entry.versionNumber else '0',
                 'flags': str(entry.flags) if entry.flags else '0',
                 'created': str(entry.whenCreated) if entry.whenCreated else '',
@@ -1664,7 +2169,15 @@ class GPOCollector:
             self._smb.getFile(share, rel_path, buf.append)
             data = b''.join(buf)
             return data if data else None
-        except Exception:
+        except Exception as e:
+            # Ignorer les erreurs "fichier non trouvé" (normales pour les GPO partielles)
+            # Logger les erreurs inattendues (connexion perdue, timeout...)
+            msg = str(e).lower()
+            if not any(x in msg for x in ('no such', 'not found', 'object_name', 'status_object',
+                                           'file not', 'path not', 'bad network')):
+                if getattr(self, '_smb_errors', 0) < 3:  # Max 3 warnings pour ne pas spammer
+                    self._smb_errors = getattr(self, '_smb_errors', 0) + 1
+                    print(f"    [!] SMB inattendu sur {rel_path[-50:]}: {e}")
             return None
 
     def _unc_to_parts(self, unc_path: str):
@@ -1727,6 +2240,9 @@ class GPOCollector:
         # Décomposer le base en segments (insensible au nb de backslashes)
         segs_base = [s for s in _re.split(r'[/\\]+', raw_base) if s]
         # segs_base ex: ['sdis25.lan', 'SysVol', 'sdis25.lan', 'Policies', '{GUID}']
+        if not segs_base or not any(s.lower() == 'policies' for s in segs_base):
+            # Chemin SYSVOL invalide ou inattendu — on ne peut pas lire cette GPO
+            return
 
         def smb_rel(*parts):
             """Chemin relatif impacket : \\domaine\\Policies\\{GUID}\\..."""
@@ -2348,6 +2864,9 @@ def _format_gpo_content(gpo: dict) -> list:
 
 
 def analyze_gpos(gpos: list) -> dict:
+    if not gpos:
+        print("[!] Aucune GPO collectée — vérifiez la connexion LDAP et les droits du compte.")
+        gpos = []
     # 1. RSOP global → findings globaux (ce qui s'applique réellement)
     rsop_settings, rsop_reg_list, rsop_registry_xml = build_rsop(gpos)
     rsop_registry = {(e[0], e[1]): e[3] for e in rsop_reg_list}
@@ -2364,6 +2883,9 @@ def analyze_gpos(gpos: list) -> dict:
 
     # Évaluer les règles sur les Registry.xml (préférences registre)
     global_findings += evaluate_registry_xml_rules(rsop_registry_xml)
+
+    # Évaluer les règles d'amélioration (enhancement)
+    enhancements = evaluate_enhancement_rules(rsop_settings, rsop_registry, rsop_regval)
 
     # Enrichir chaque finding avec : quelles GPO contiennent ce paramètre + action recommandée
     all_rules_by_id = {r['id']: r for r in AUDIT_RULES + AUDIT_RULES_REGVAL + AUDIT_RULES_REGISTRY_XML}
@@ -2537,6 +3059,7 @@ def analyze_gpos(gpos: list) -> dict:
     criticals = sum(1 for f in global_findings if f['severity'] == 'critical')
     warnings  = sum(1 for f in global_findings if f['severity'] == 'warning')
     infos     = sum(1 for f in global_findings if f['severity'] == 'info')
+    enhancements_count = len(enhancements)
     global_score = max(0, min(100, 100 - criticals * 15 - warnings * 5 - infos * 2))
 
     return {
@@ -2545,6 +3068,8 @@ def analyze_gpos(gpos: list) -> dict:
         'criticals': criticals,
         'warnings': warnings,
         'infos': infos,
+        'enhancements_count': enhancements_count,
+        'enhancements': enhancements,
         'compliant_count': len(compliant_rules),
         'compliant_rules': compliant_rules,
         'orphan_count': len(orphan_gpos),
@@ -2861,6 +3386,7 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
   <div class="nav-group">
     <div class="nav-label">Résultats</div>
     <div class="nav-item" onclick="nav('compliant',this)"><span class="nav-icon">✓</span>Conformes ({{ data.compliant_count }})</div>
+    <div class="nav-item" onclick="nav('enhancements',this)"><span class="nav-icon">⬆</span>Améliorations ({{ data.enhancements_count }})</div>
     <div class="nav-item" onclick="nav('orphans',this)"><span class="nav-icon">◌</span>Orphelines ({{ data.orphan_count }})</div>
   </div>
 
@@ -2896,6 +3422,11 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
       <div class="v">{{ data.infos }}</div><div class="l">Informatifs</div>
       <div style="font-size:10px;color:var(--txt3);margin-top:4px">Cliquer pour voir →</div>
       <span class="tooltip">Paramètres non configurés — cliquez pour voir les détails</span>
+    </div>
+    <div class="mc clickable has-tooltip" style="cursor:pointer;--mc-color:var(--teal)" onclick="openQuickPanel('enhancement')">
+      <div class="v" style="color:var(--teal)">{{ data.enhancements_count }}</div><div class="l">Améliorations</div>
+      <div style="font-size:10px;color:var(--txt3);margin-top:4px">Cliquer pour voir →</div>
+      <span class="tooltip">Pistes de durcissement supplémentaire — CIS/ANSSI niveau avancé</span>
     </div>
     <div class="mc green clickable has-tooltip" onclick="openQuickPanel('compliant')" style="cursor:pointer">
       <div class="v">{{ data.compliant_count }}</div><div class="l">Conformes</div>
@@ -3077,6 +3608,64 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
     </div>
   </div>
   {% endfor %}
+</div>
+
+<!-- ══ ENHANCEMENTS ══ -->
+<div id="view-enhancements" class="view">
+  <div class="view-header">
+    <div class="view-title">Pistes d'amélioration</div>
+    <div class="view-sub">Durcissement supplémentaire — CIS Benchmarks · ANSSI · MS Security Baseline 2022</div>
+  </div>
+  <div class="info-box" style="border-color:var(--teal);background:rgba(45,212,191,.08)">
+    Ces suggestions ne sont <strong>pas des failles</strong> — votre configuration est conforme sur ces points.
+    Il s'agit de mesures de durcissement avancées, sourcées CIS/ANSSI, applicables selon votre contexte.
+    Chaque recommandation inclut les clés de registre et les chemins GPO exacts.
+  </div>
+  <div class="toolbar">
+    <div class="search-box">
+      <span class="search-icon">⌕</span>
+      <input type="text" placeholder="Rechercher une amélioration…" oninput="searchEnh(this.value)">
+    </div>
+    <button class="filter-btn on" onclick="filtEnh('all',this)">Toutes ({{ data.enhancements_count }})</button>
+    <button class="filter-btn" onclick="filtEnh('configured',this)">Partiellement configuré</button>
+    <button class="filter-btn" onclick="filtEnh('missing',this)">Non configuré</button>
+    <button class="filter-btn" onclick="filtEnh('informational',this)">Architectural</button>
+  </div>
+  <div id="enh-list">
+  {% for e in data.enhancements %}
+  <div class="finding-card stagger-item enh-card"
+       data-nc="{{ 'true' if e.get('not_configured') else 'false' }}"
+       data-info="{{ 'true' if e.detail and 'architecturale' in e.detail else 'false' }}"
+       data-txt="{{ e.title|lower }} {{ e.category|lower }} {{ e.ref|lower }}">
+    <div class="fc-head" onclick="togFC(this)">
+      <div class="sev-dot" style="background:var(--teal)"></div>
+      <div style="flex:1">
+        <div class="fc-title">{{ e.title }}</div>
+        <div style="font-size:11px;color:var(--txt3);margin-top:1px">{{ e.category }}</div>
+      </div>
+      <span class="sev-pill" style="background:rgba(45,212,191,.12);color:var(--teal);margin-left:auto;margin-right:8px">
+        {{ '🏗 architectural' if e.detail and 'architecturale' in e.detail else ('⚙ à configurer' if e.get('not_configured') else '↑ à renforcer') }}
+      </span>
+      <div class="fc-arr">▶</div>
+    </div>
+    <div class="fc-body">
+      <div class="fc-detail">{{ e.detail }}</div>
+      <div class="fc-ref">{{ e.ref }}</div>
+      <div style="margin-top:10px">
+        <div style="font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">Pourquoi ?</div>
+        <div style="font-size:12px;color:var(--txt2);line-height:1.7;padding:10px 12px;background:var(--surface);border-radius:8px;border-left:3px solid var(--teal)">{{ e.rationale }}</div>
+      </div>
+      <div style="margin-top:10px">
+        <div style="font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">Comment l'implémenter ?</div>
+        <div style="font-size:12px;color:var(--txt2);line-height:1.7;padding:10px 12px;background:var(--surface);border-radius:8px;border-left:3px solid var(--border2);font-family:'DM Mono'">{{ e.implementation }}</div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+  {% if not data.enhancements %}
+  <div style="text-align:center;padding:48px;color:var(--txt3)">🎉 Aucune amélioration détectée — niveau de durcissement maximal !</div>
+  {% endif %}
+  </div>
 </div>
 
 <!-- ══ ORPHANS ══ -->
@@ -3530,10 +4119,11 @@ function populateCompareSelects() {}
 
 // ── Quick Panel ──
 let _qpSev = 'critical';
-const _findingsData    = {{ data.all_findings | tojson }};
-const _compliantData   = {{ data.compliant_rules | tojson }};
-const _orphanData      = {{ data.orphan_gpos | tojson }};
-const _duplicatesData  = {{ data.true_duplicates | tojson }};
+const _findingsData      = {{ data.all_findings | tojson }};
+const _compliantData     = {{ data.compliant_rules | tojson }};
+const _orphanData        = {{ data.orphan_gpos | tojson }};
+const _duplicatesData    = {{ data.true_duplicates | tojson }};
+const _enhancementsData  = {{ data.enhancements | tojson }};
 
 function openQuickPanel(mode) {
   _qpSev = mode;
@@ -3552,12 +4142,43 @@ function openQuickPanel(mode) {
   const labels = {
     critical:  '🔴 Problèmes critiques',
     warning:   '🟡 Avertissements',
-    info:      '🔵 Informatifs',
-    compliant: '✅ Contrôles conformes',
-    orphan:    '◌ GPO orphelines',
-    all:       '📋 Toutes les GPO + doublons',
+    info:        '🔵 Informatifs',
+    compliant:   '✅ Contrôles conformes',
+    enhancement: '⬆ Pistes d\'amélioration',
+    orphan:      '◌ GPO orphelines',
+    all:         '📋 Toutes les GPO + doublons',
   };
   titleEl.textContent = labels[mode] || mode;
+
+  // ── Enhancements ──
+  if (mode === 'enhancement') {
+    if (!_enhancementsData.length) {
+      cnt.innerHTML = '<div style="padding:24px;text-align:center;color:var(--txt3)">Aucune piste d\'amélioration 🎉 — niveau de durcissement maximal !</div>';
+    } else {
+      cnt.innerHTML = _enhancementsData.map((e, i) => {
+        const isArchi   = e.detail && e.detail.includes('architecturale');
+        const isMissing = e.not_configured && !isArchi;
+        const badge     = isArchi ? '🏗 architectural' : (isMissing ? '⚙ à configurer' : '↑ à renforcer');
+        return `<div class="qp-finding" id="qpe-${i}">
+          <div class="qp-finding-head">
+            <div class="sev-dot" style="background:var(--teal);margin-top:4px;flex-shrink:0"></div>
+            <div style="flex:1">
+              <div class="qp-title">${e.title}</div>
+              <div style="font-size:10px;color:var(--txt3);font-family:'DM Mono';margin-top:2px">${e.ref} · ${e.category}</div>
+            </div>
+            <span style="font-size:10px;padding:2px 8px;border-radius:20px;background:rgba(45,212,191,.12);color:var(--teal);margin-right:8px;white-space:nowrap">${badge}</span>
+            <span class="qp-finding-toggle" onclick="document.getElementById('qpe-${i}').classList.toggle('open')">▶</span>
+          </div>
+          <div class="qp-reco">
+            <div style="font-size:12px;color:var(--txt2);margin-bottom:8px;line-height:1.6">${e.rationale}</div>
+            <div style="padding:8px 10px;background:var(--surface2);border-radius:6px;border-left:2px solid var(--teal);font-size:12px;color:var(--txt2);font-family:'DM Mono';line-height:1.6">${e.implementation}</div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+    panel.style.display = 'block';
+    return;
+  }
 
   // ── Findings (critical / warning / info) ──
   if (['critical', 'warning', 'info'].includes(mode)) {
@@ -3701,6 +4322,28 @@ function searchFindings(q) {
 }
 
 // ── Toggle helpers ──
+// ── Enhancement filters ──
+function filtEnh(mode, btn) {
+  document.querySelectorAll('#view-enhancements .filter-btn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  document.querySelectorAll('.enh-card').forEach(c => {
+    const isInfo    = c.dataset.info === 'true';
+    const isMissing = c.dataset.nc === 'true' && !isInfo;
+    const isConfig  = c.dataset.nc === 'false';
+    let show = true;
+    if (mode === 'configured')    show = isConfig;
+    if (mode === 'missing')       show = isMissing;
+    if (mode === 'informational') show = isInfo;
+    c.style.display = show ? '' : 'none';
+  });
+}
+function searchEnh(q) {
+  q = q.toLowerCase();
+  document.querySelectorAll('.enh-card[data-txt]').forEach(c => {
+    c.style.display = (!q || c.dataset.txt.includes(q)) ? '' : 'none';
+  });
+}
+
 function togFC(hdr) {
   const b = hdr.nextElementSibling, a = hdr.querySelector('.fc-arr');
   b.classList.toggle('open'); a.classList.toggle('open');
@@ -3716,11 +4359,30 @@ function togOU(hdr) { hdr.nextElementSibling.classList.toggle('open'); }
 """
 
 
+def _make_json_safe(obj):
+    """Rend un objet sérialisable en JSON — convertit les types inconnus en str."""
+    if isinstance(obj, dict):
+        return {k: _make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_make_json_safe(i) for i in obj]
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    return str(obj)
+
 def generate_html_report(data: dict, output_path: str):
-    tpl = Template(HTML_TEMPLATE)
-    html = tpl.render(data=data)
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(html)
+    try:
+        safe_data = _make_json_safe(data)
+        tpl = Template(HTML_TEMPLATE)
+        html = tpl.render(data=safe_data)
+    except Exception as e:
+        print(f"[!] Erreur rendu HTML : {e}")
+        raise
+    try:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(html)
+    except OSError as e:
+        print(f"[!] Impossible d'écrire {output_path} : {e}")
+        raise
     print(f"[+] Rapport généré : {output_path}")
 
 
@@ -3766,7 +4428,7 @@ Exemples :
     print("[*] Analyse RSOP…")
     report = analyze_gpos(gpos)
     print(f"[+] Score global : {report['global_score']}/100")
-    print(f"[+] Critiques={report['criticals']}  Warnings={report['warnings']}  Conformes={report['compliant_count']}")
+    print(f"[+] Critiques={report['criticals']}  Warnings={report['warnings']}  Conformes={report['compliant_count']}  Améliorations={report['enhancements_count']}")
 
     if args.json:
         with open(args.output, 'w') as f:
@@ -3776,14 +4438,10 @@ Exemples :
     print("[+] Terminé.")
 
 
-if __name__ == '__main__':
-    main()
-
-
 # ─── Wizard ───────────────────────────────────────────────────────────────────
-import getpass as _getpass
-import configparser as _configparser
-from pathlib import Path as _Path
+import getpass
+import configparser
+
 
 CONFIG_FILE = Path(__file__).parent / "gpoctopus.conf"
 
@@ -3952,6 +4610,7 @@ def show_result(report_path):
         print(f"  Critiques      : {C.RED}{data.get('criticals', 0)}{C.RESET}")
         print(f"  Avertissements : {C.YELLOW}{data.get('warnings', 0)}{C.RESET}")
         print(f"  Conformes      : {C.GREEN}{data.get('compliant_count', 0)}{C.RESET}")
+        print(f"  Améliorations  : {C.CYAN}{data.get('enhancements_count', 0)}{C.RESET}")
         print(f"  GPO orphelines : {data.get('orphan_count', 0)}")
 
 def open_report(report_path):
@@ -4176,7 +4835,7 @@ def _run_auditor(extra_args, output, demo=False):
         sys.argv += ["--demo"]
     sys.argv += extra_args + ["-o", output]
 
-    import io, contextlib
+    import io, contextlib, traceback as _tb
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
@@ -4189,17 +4848,29 @@ def _run_auditor(extra_args, output, demo=False):
                 warn(line[4:])
             elif line.startswith("[*]"):
                 info(line[4:])
+            elif line.strip():
+                info(line)
         return True
     except SystemExit as e:
-        if e.code != 0:
+        output_txt = buf.getvalue()
+        if e.code not in (0, None):
             err("Le script a rencontré une erreur.")
-            _explain_script_error(buf.getvalue())
+            print(output_txt[-800:] if output_txt else "")
+            _explain_script_error(output_txt)
             return False
+        # SystemExit(0) = fin normale
+        for line in output_txt.splitlines():
+            if line.startswith("[+]"): ok(line[4:])
+            elif line.startswith("[!]"): warn(line[4:])
+            elif line.startswith("[*]"): info(line[4:])
         return True
+    except KeyboardInterrupt:
+        print()
+        warn("Audit interrompu par l'utilisateur.")
+        return False
     except Exception as e:
-        err(f"Erreur : {e}")
-        import traceback
-        print(f"\n{C.RED}{traceback.format_exc()}{C.RESET}")
+        err(f"Erreur inattendue : {type(e).__name__}: {e}")
+        print(f"\n{C.RED}{_tb.format_exc()}{C.RESET}")
         _explain_script_error(str(e))
         return False
     finally:
@@ -4265,24 +4936,22 @@ def _explain_script_error(error_str):
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
-    try:
-        run_wizard()
-    except KeyboardInterrupt:
-        print(f"\n\n  {C.DIM}Annulé.{C.RESET}\n")
-        sys.exit(0)
+# ─── Entry point ──────────────────────────────────────────────────────────────
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Si des arguments CLI sont passés → mode script direct
-    if len(sys.argv) > 1:
-        main()
-    else:
-        # Pas d'arguments → wizard interactif
+    # Wizard si aucun argument CLI n'est passé ET qu'on est dans un terminal interactif
+    # Sinon : mode script direct (arguments CLI)
+    no_args = len(sys.argv) == 1
+    is_tty  = sys.stdin.isatty()
+
+    if no_args and is_tty:
         try:
             run_wizard()
         except KeyboardInterrupt:
             print("\n\n  Annulé.\n")
             sys.exit(0)
+    else:
+        main()
