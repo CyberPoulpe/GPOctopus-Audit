@@ -1488,6 +1488,241 @@ def detect_gpo_conflicts(gpos: list) -> list:
     return conflicts[:100]   # cap à 100 pour ne pas exploser le JSON
 
 
+def build_search_index(gpos: list) -> list:
+    """
+    Construit un index de recherche exhaustif sur toutes les GPO.
+    Chaque entrée représente un élément trouvable : paramètre, imprimante,
+    lecteur, script, tâche, registre, service, groupe, variable, fichier...
+
+    Structure d'une entrée :
+    {
+        'gpo_name':  str,   # nom de la GPO
+        'gpo_guid':  str,   # GUID pour navigation
+        'type':      str,   # catégorie (imprimante, script, registre, ...)
+        'type_icon': str,   # emoji pour l'UI
+        'key':       str,   # nom du paramètre / clé
+        'value':     str,   # valeur / chemin / commande
+        'context':   str,   # info supplémentaire (OU, action, utilisateur...)
+        'search_blob': str, # texte concaténé pour la recherche full-text
+    }
+    """
+    index = []
+
+    # Labels lisibles pour les sections GptTmpl.inf
+    SECTION_LABELS = {
+        'password_policy':  ('Politique mots de passe', '🔑'),
+        'system_access':    ('Accès système',            '🔒'),
+        'event_audit':      ('Audit événements',         '📋'),
+        'kerberos_policy':  ('Stratégie Kerberos',       '🎫'),
+        'privilege_rights': ('Droits utilisateurs',      '👤'),
+        'registry_values':  ('Registre (GptTmpl)',       '🗝'),
+    }
+
+    # Labels lisibles pour les clés GptTmpl.inf
+    KEY_LABELS = {
+        'minimumpasswordlength':    'Longueur minimale mot de passe',
+        'maximumpasswordage':       'Durée max mot de passe (jours)',
+        'minimumpasswordage':       'Durée min mot de passe (jours)',
+        'passwordhistorysize':      'Historique mots de passe',
+        'passwordcomplexity':       'Complexité requise',
+        'lockoutbadcount':          'Seuil de verrouillage',
+        'lockoutduration':          'Durée de verrouillage (min)',
+        'resetlockoutcount':        'Réinitialisation compteur (min)',
+        'nolmhash':                 'Stockage hash LM',
+        'lmcompatibilitylevel':     'Niveau NTLM',
+        'restrictanonymous':        'Restriction accès anonyme',
+        'enableguestaccount':       'Compte Invité',
+        'auditlogonevents':         'Audit connexions',
+        'auditaccountmanage':       'Audit gestion comptes',
+        'auditpolicychange':        'Audit changements stratégie',
+        'auditprivilegeusse':       'Audit utilisation privilèges',
+        'auditsystemevents':        'Audit événements système',
+        'uselogoncredential':       'WDigest (mots de passe en clair)',
+        'smb1':                     'SMBv1',
+        'enablefirewall':           'Pare-feu Windows',
+        'enablelua':                'UAC (EnableLUA)',
+        'runasppl':                 'Protection LSASS (RunAsPPL)',
+        'enablescriptblocklogging': 'PowerShell ScriptBlock Logging',
+    }
+
+    def _add(gpo, type_, icon, key, value, context=''):
+        blob = ' '.join(filter(None, [
+            gpo['name'], type_, key, value, context
+        ])).lower()
+        index.append({
+            'gpo_name':    gpo['name'],
+            'gpo_guid':    gpo['guid'],
+            'type':        type_,
+            'type_icon':   icon,
+            'key':         key,
+            'value':       str(value) if value is not None else '',
+            'context':     context,
+            'search_blob': blob,
+        })
+
+    for gpo in gpos:
+        name = gpo['name']
+        guid = gpo['guid']
+
+        # ── Nom de la GPO elle-même ──────────────────────────────────────────
+        _add(gpo, 'GPO', '📄', 'Nom', name,
+             f"{len(gpo.get('links', []))} lien(s) OU")
+
+        # ── GptTmpl.inf (settings) ──────────────────────────────────────────
+        for section, params in gpo.get('settings', {}).items():
+            if section in ('unicode', 'version'):
+                continue
+            sec_label, sec_icon = SECTION_LABELS.get(section, (section, '⚙'))
+            for k, v in params.items():
+                key_label = KEY_LABELS.get(k.lower(), k)
+                _add(gpo, sec_label, sec_icon, key_label, v, section)
+
+        # ── Registry.pol (binaire) ──────────────────────────────────────────
+        for (reg_key, vname, rtype, val) in gpo.get('registry_entries', []):
+            short_key = reg_key.split('\\')[-1]
+            _add(gpo, 'Registre (Registry.pol)', '🗝',
+                 f"{short_key} → {vname}", str(val), reg_key)
+
+        # ── Registry.pol utilisateur ─────────────────────────────────────────
+        for (reg_key, vname, rtype, val) in gpo.get('registry_entries_user', []):
+            short_key = reg_key.split('\\')[-1]
+            _add(gpo, 'Registre utilisateur (Registry.pol)', '🗝',
+                 f"{short_key} → {vname}", str(val), reg_key)
+
+        # ── Imprimantes Machine ──────────────────────────────────────────────
+        for p in gpo.get('printers', []):
+            ctx = f"Action: {p.get('action','')} | Type: {p.get('type','')}"
+            if p.get('default'):
+                ctx += ' | Imprimante par défaut'
+            if p.get('comment'):
+                ctx += f" | {p['comment']}"
+            _add(gpo, 'Imprimante (Machine)', '🖨',
+                 p.get('name', ''), p.get('path', ''), ctx)
+
+        # ── Imprimantes Utilisateur ──────────────────────────────────────────
+        for p in gpo.get('printers_user', []):
+            ctx = f"Action: {p.get('action','')} | Type: {p.get('type','')}"
+            if p.get('default'):
+                ctx += ' | Imprimante par défaut'
+            _add(gpo, 'Imprimante (Utilisateur)', '🖨',
+                 p.get('name', ''), p.get('path', ''), ctx)
+
+        # ── Lecteurs réseau Machine ──────────────────────────────────────────
+        for d in gpo.get('drives', []):
+            _add(gpo, 'Lecteur réseau (Machine)', '💾',
+                 f"{d.get('letter','')}:", d.get('path', ''),
+                 f"Label: {d.get('label','')} | Action: {d.get('action','')}")
+
+        # ── Lecteurs réseau Utilisateur ──────────────────────────────────────
+        for d in gpo.get('drives_user', []):
+            _add(gpo, 'Lecteur réseau (Utilisateur)', '💾',
+                 f"{d.get('letter','')}:", d.get('path', ''),
+                 f"Label: {d.get('label','')} | Action: {d.get('action','')}")
+
+        # ── Raccourcis Machine ───────────────────────────────────────────────
+        for s in gpo.get('shortcuts_machine', []):
+            _add(gpo, 'Raccourci (Machine)', '🔗',
+                 s.get('name', ''), s.get('target', ''),
+                 f"Emplacement: {s.get('location','')} | Action: {s.get('action','')}")
+
+        # ── Raccourcis Utilisateur ───────────────────────────────────────────
+        for s in gpo.get('shortcuts_user', []):
+            _add(gpo, 'Raccourci (Utilisateur)', '🔗',
+                 s.get('name', ''), s.get('target', ''),
+                 f"Emplacement: {s.get('location','')} | Action: {s.get('action','')}")
+
+        # ── Scripts ─────────────────────────────────────────────────────────
+        scripts = gpo.get('scripts', {})
+        scope_labels = {
+            'startup':  'Script démarrage machine',
+            'shutdown': 'Script arrêt machine',
+            'logon':    'Script ouverture session',
+            'logoff':   'Script fermeture session',
+        }
+        for scope_key, scope_label in scope_labels.items():
+            for sc in (scripts.get(scope_key) or []):
+                if isinstance(sc, dict):
+                    cmd    = sc.get('cmd', '')
+                    params = sc.get('params', '')
+                else:
+                    cmd, params = str(sc), ''
+                if cmd:
+                    _add(gpo, scope_label, '📜',
+                         cmd, params, scope_label)
+
+        # ── Tâches planifiées ────────────────────────────────────────────────
+        for t in gpo.get('scheduled_tasks', []):
+            cmd = t.get('cmd', '') + (' ' + t.get('args', '') if t.get('args') else '')
+            _add(gpo, 'Tâche planifiée', '⏰',
+                 t.get('name', cmd), cmd,
+                 f"Utilisateur: {t.get('user','')} | Action: {t.get('action','')}")
+
+        # ── Groupes locaux ───────────────────────────────────────────────────
+        for g in gpo.get('groups', []):
+            members = ', '.join(m.get('name', '') for m in g.get('members', []))
+            _add(gpo, 'Groupe local', '👥',
+                 g.get('name', ''), members,
+                 f"Action: {g.get('action','')}")
+            # Indexer aussi les membres individuellement
+            for m in g.get('members', []):
+                _add(gpo, 'Membre de groupe', '👤',
+                     m.get('name', ''), g.get('name', ''),
+                     f"Groupe: {g.get('name','')} | Action: {m.get('action','')}")
+
+        # ── Variables d'environnement ────────────────────────────────────────
+        for v in gpo.get('env_vars', []):
+            _add(gpo, "Variable d'environnement", '⚙',
+                 v.get('name', ''), v.get('value', ''),
+                 f"Action: {v.get('action','')}")
+
+        # ── Services Windows ─────────────────────────────────────────────────
+        for s in gpo.get('services', []):
+            _add(gpo, 'Service Windows', '🔧',
+                 s.get('name', ''),
+                 f"{s.get('startup','')} / {s.get('action','')}",
+                 f"Action GPO: {s.get('gpo_act','')}")
+
+        # ── Copie de fichiers ────────────────────────────────────────────────
+        for f in gpo.get('files_machine', []):
+            _add(gpo, 'Copie de fichier (Machine)', '📁',
+                 f.get('name', ''), f.get('dst', ''),
+                 f"Source: {f.get('src','')} | Action: {f.get('action','')}")
+
+        for f in gpo.get('files_user', []):
+            _add(gpo, 'Copie de fichier (Utilisateur)', '📁',
+                 f.get('name', ''), f.get('dst', ''),
+                 f"Source: {f.get('src','')} | Action: {f.get('action','')}")
+
+        # ── Audit avancé (audit.csv) ─────────────────────────────────────────
+        for a in gpo.get('audit_csv', []):
+            _add(gpo, 'Audit avancé', '🔍',
+                 a.get('subcategory', ''), a.get('inclusion', ''),
+                 'audit.csv')
+
+        # ── Préférences Registre XML ─────────────────────────────────────────
+        for scope, key in [('Machine', 'registry_xml_machine'),
+                            ('Utilisateur', 'registry_xml_user')]:
+            for r in gpo.get(key, []):
+                full_key = (
+                    f"{r.get('hive','').upper()}\\"
+                    f"{r.get('key','')}\\"
+                    f"{r.get('name','')}"
+                ).rstrip('\\')
+                _add(gpo, f'Préférences Registre ({scope})', '📋',
+                     r.get('name', '') or r.get('key', ''),
+                     str(r.get('value', '')),
+                     f"{full_key} | Action: {r.get('action','')}")
+
+        # ── Liens OU ────────────────────────────────────────────────────────
+        for link in gpo.get('links', []):
+            _add(gpo, 'Lien OU', '⊢',
+                 link.get('ou', ''), '',
+                 f"{'ENFORCED' if link.get('enforced') else 'Normal'}"
+                 f"{' | Lien désactivé' if link.get('disabled') else ''}")
+
+    return index
+
+
 def build_rsop(gpos: list) -> tuple[dict, list]:
     """
     Construit le RSOP (Resultant Set of Policy) en agrégeant toutes les GPO.
@@ -2796,7 +3031,8 @@ def analyze_gpos(gpos: list) -> dict:
         'gpo_reports': sorted(gpo_reports, key=lambda g: g['score']),
         'all_findings': global_findings,
         'generated_at': datetime.now().strftime('%d/%m/%Y %H:%M'),
-        'gpo_count': len(gpos),
+        'gpo_count':     len(gpos),
+        'search_index':  build_search_index(gpos),
     }
 
 
@@ -3086,6 +3322,20 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
   </div>
 
   <div class="nav-group">
+    <div class="nav-group" style="padding-bottom:0">
+      <div style="padding:10px 16px 6px">
+        <div style="position:relative">
+          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--txt3);font-size:14px;pointer-events:none">⌕</span>
+          <input id="global-search-input" type="text"
+            placeholder="Rechercher dans toutes les GPO…"
+            style="width:100%;padding:8px 10px 8px 30px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--txt);font-size:12px;font-family:'Outfit';outline:none"
+            oninput="globalSearch(this.value)"
+            onfocus="if(this.value) nav('search', document.querySelector('[onclick*=search]'))"
+          >
+        </div>
+      </div>
+    </div>
+
     <div class="nav-label">Vue d'ensemble</div>
     <div class="nav-item active" onclick="nav('dashboard',this)"><span class="nav-icon">◈</span>Tableau de bord</div>
     <div class="nav-item" onclick="nav('priorities',this)">
@@ -3095,6 +3345,7 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
   </div>
   <div class="nav-group">
     <div class="nav-label">Analyse</div>
+    <div class="nav-item" onclick="nav('search',this)"><span class="nav-icon">⌕</span>Recherche GPO</div>
     <div class="nav-item" onclick="nav('findings',this)"><span class="nav-icon">⚑</span>Constatations RSOP</div>
     <div class="nav-item" onclick="nav('gpolist',this)"><span class="nav-icon">≡</span>GPO par GPO</div>
     <div class="nav-item" onclick="nav('bytype',this)"><span class="nav-icon">◫</span>Par type</div>
@@ -3210,6 +3461,68 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
     <div class="view-sub">Classées par impact — corrigez dans cet ordre</div>
   </div>
   <div id="priority-list"></div>
+</div>
+
+<!-- ══ SEARCH ══ -->
+<div id="view-search" class="view">
+  <div class="view-header">
+    <div class="view-title">⌕ Recherche dans toutes les GPO</div>
+    <div class="view-sub">Cherchez un paramètre, une imprimante, un script, un chemin réseau, un service… dans l'ensemble de vos GPO</div>
+  </div>
+
+  <div style="margin-bottom:20px">
+    <div style="position:relative">
+      <span style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--txt3);font-size:18px;pointer-events:none">⌕</span>
+      <input id="search-main-input" type="text"
+        placeholder="Ex: \\\\print01, startup.ps1, minimumpasswordlength, SMB, proxy, 192.168…"
+        style="width:100%;padding:14px 14px 14px 44px;background:var(--surface);border:1px solid var(--border2);border-radius:12px;color:var(--txt);font-size:15px;font-family:'Outfit';outline:none;transition:border-color .15s"
+        oninput="globalSearch(this.value)"
+        onfocus="this.style.borderColor='var(--blue)'"
+        onblur="this.style.borderColor='var(--border2)'"
+      >
+    </div>
+
+    <!-- Filtres rapides -->
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px" id="search-quick-filters">
+      <span style="font-size:11px;color:var(--txt3);align-self:center;margin-right:4px">Raccourcis :</span>
+      <button class="filter-btn" onclick="quickSearch('imprimante')">🖨 Imprimantes</button>
+      <button class="filter-btn" onclick="quickSearch('lecteur réseau')">💾 Lecteurs</button>
+      <button class="filter-btn" onclick="quickSearch('script')">📜 Scripts</button>
+      <button class="filter-btn" onclick="quickSearch('tâche planifiée')">⏰ Tâches</button>
+      <button class="filter-btn" onclick="quickSearch('service windows')">🔧 Services</button>
+      <button class="filter-btn" onclick="quickSearch('registre')">🗝 Registre</button>
+      <button class="filter-btn" onclick="quickSearch('groupe local')">👥 Groupes</button>
+      <button class="filter-btn" onclick="quickSearch('lien ou')">⊢ Liens OU</button>
+    </div>
+  </div>
+
+  <!-- Filtres par type -->
+  <div id="search-type-filters" style="display:none;margin-bottom:16px">
+    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+      <span style="font-size:11px;color:var(--txt3)">Filtrer par type :</span>
+      <button class="filter-btn on" onclick="filtSearchType('all',this)">Tous</button>
+      <span id="search-type-btns"></span>
+    </div>
+  </div>
+
+  <!-- Résultats -->
+  <div id="search-results-header" style="display:none;margin-bottom:12px">
+    <span id="search-count" style="font-size:13px;color:var(--txt2)"></span>
+    <span id="search-gpo-count" style="font-size:12px;color:var(--txt3);margin-left:8px"></span>
+  </div>
+
+  <div id="search-results"></div>
+
+  <!-- État initial -->
+  <div id="search-empty-state" style="text-align:center;padding:60px 20px;color:var(--txt3)">
+    <div style="font-size:48px;margin-bottom:16px">⌕</div>
+    <div style="font-size:15px;font-weight:500;margin-bottom:8px">Recherchez dans toutes vos GPO</div>
+    <div style="font-size:13px;line-height:1.8">
+      Chemin UNC d'imprimante · Lettre de lecteur · Nom de script<br>
+      Clé de registre · Nom de service · Commande de tâche planifiée<br>
+      Nom de groupe · Variable d'environnement · Paramètre de sécurité
+    </div>
+  </div>
 </div>
 
 <!-- ══ FINDINGS ══ -->
@@ -3927,6 +4240,184 @@ const _compliantData   = {{ data.compliant_rules | tojson }};
 const _orphanData      = {{ data.orphan_gpos | tojson }};
 const _duplicatesData  = {{ data.true_duplicates | tojson }};
 const _conflictsData   = {{ data.gpo_conflicts | tojson }};
+const _searchIndex     = {{ data.search_index | tojson }};
+
+// ── Moteur de recherche global ──────────────────────────────────────────────
+let _searchTypeFilter = 'all';
+let _lastQuery = '';
+
+function quickSearch(q) {
+  document.getElementById('search-main-input').value = q;
+  document.getElementById('global-search-input').value = q;
+  nav('search', document.querySelector('[onclick*="nav(\'search\'"]') ||
+      document.querySelector('.nav-item:nth-child(1)'));
+  globalSearch(q);
+}
+
+function globalSearch(q) {
+  q = q.trim();
+  _lastQuery = q;
+
+  // Sync les deux champs
+  const mainInput   = document.getElementById('search-main-input');
+  const sideInput   = document.getElementById('global-search-input');
+  if (mainInput && mainInput.value !== q) mainInput.value = q;
+  if (sideInput && sideInput.value !== q) sideInput.value = q;
+
+  const emptyState  = document.getElementById('search-empty-state');
+  const resultsDiv  = document.getElementById('search-results');
+  const headerDiv   = document.getElementById('search-results-header');
+  const typeFilters = document.getElementById('search-type-filters');
+
+  if (!q || q.length < 2) {
+    emptyState.style.display  = '';
+    resultsDiv.innerHTML      = '';
+    headerDiv.style.display   = 'none';
+    typeFilters.style.display = 'none';
+    _searchTypeFilter = 'all';
+    return;
+  }
+
+  emptyState.style.display = 'none';
+
+  // Tokeniser la requête (plusieurs mots = ET)
+  const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+
+  // Filtrer l'index
+  let results = _searchIndex.filter(item => {
+    const blob = item.search_blob;
+    return tokens.every(t => blob.includes(t));
+  });
+
+  // Appliquer le filtre par type si actif
+  if (_searchTypeFilter !== 'all') {
+    results = results.filter(r => r.type === _searchTypeFilter);
+  }
+
+  // Construire les filtres par type disponibles
+  const typeCounts = {};
+  const allMatches = _searchIndex.filter(item =>
+    tokens.every(t => item.search_blob.includes(t))
+  );
+  allMatches.forEach(r => {
+    typeCounts[r.type] = (typeCounts[r.type] || 0) + 1;
+  });
+
+  if (Object.keys(typeCounts).length > 1) {
+    typeFilters.style.display = '';
+    const typeBtnsEl = document.getElementById('search-type-btns');
+    typeBtnsEl.innerHTML = Object.entries(typeCounts)
+      .sort((a,b) => b[1]-a[1])
+      .map(([type, count]) => {
+        const item = _searchIndex.find(i => i.type === type);
+        const icon = item ? item.type_icon : '📄';
+        const active = _searchTypeFilter === type ? ' on' : '';
+        return `<button class="filter-btn${active}" onclick="setSearchType('${type.replace(/'/g,"\\'")}',this)">${icon} ${type} (${count})</button>`;
+      }).join('');
+  } else {
+    typeFilters.style.display = 'none';
+  }
+
+  // Grouper par GPO
+  const byGpo = {};
+  results.forEach(r => {
+    if (!byGpo[r.gpo_guid]) {
+      byGpo[r.gpo_guid] = { name: r.gpo_name, guid: r.gpo_guid, items: [] };
+    }
+    byGpo[r.gpo_guid].items.push(r);
+  });
+
+  const gpoGroups = Object.values(byGpo);
+
+  // Header
+  headerDiv.style.display = '';
+  document.getElementById('search-count').textContent =
+    `${results.length} résultat${results.length > 1 ? 's' : ''}`;
+  document.getElementById('search-gpo-count').textContent =
+    `dans ${gpoGroups.length} GPO${gpoGroups.length > 1 ? '' : ''}`;
+
+  if (!results.length) {
+    resultsDiv.innerHTML = `
+      <div style="text-align:center;padding:40px;color:var(--txt3)">
+        <div style="font-size:32px;margin-bottom:12px">🔍</div>
+        <div style="font-size:14px">Aucun résultat pour "<strong style="color:var(--txt)">${_escHtml(q)}</strong>"</div>
+        <div style="font-size:12px;margin-top:8px">Essayez avec moins de mots ou un terme plus général</div>
+      </div>`;
+    return;
+  }
+
+  // Rendu groupé par GPO
+  resultsDiv.innerHTML = gpoGroups.map(group => {
+    const items = group.items.slice(0, 50); // max 50 par GPO
+    const more  = group.items.length - items.length;
+
+    const rows = items.map(item => {
+      const keyHl   = _highlight(item.key,   tokens);
+      const valHl   = _highlight(item.value, tokens);
+      const ctxHl   = _highlight(item.context, tokens);
+      const typeHl  = _highlight(item.type,  tokens);
+
+      return `<tr style="cursor:default" onclick="showGPODetail('${group.guid}')">
+        <td style="padding:7px 12px;border-bottom:1px solid var(--border);width:28px;text-align:center;font-size:15px">${item.type_icon}</td>
+        <td style="padding:7px 12px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);white-space:nowrap;width:180px">${typeHl}</td>
+        <td style="padding:7px 12px;border-bottom:1px solid var(--border);font-size:13px;font-weight:500;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${keyHl}</td>
+        <td style="padding:7px 12px;border-bottom:1px solid var(--border);font-size:12px;font-family:'DM Mono';color:var(--txt2);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${valHl}</td>
+        <td style="padding:7px 12px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ctxHl}</td>
+      </tr>`;
+    }).join('');
+
+    const moreRow = more > 0 ? `
+      <tr><td colspan="5" style="padding:6px 12px;font-size:11px;color:var(--txt3);font-style:italic">
+        … et ${more} résultat${more>1?'s':''} supplémentaire${more>1?'s':''} — ouvrez la GPO pour tout voir
+      </td></tr>` : '';
+
+    return `
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden">
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface2);border-bottom:1px solid var(--border);cursor:pointer"
+             onclick="showGPODetail('${group.guid}')">
+          <span style="font-size:14px">📄</span>
+          <span style="font-size:13px;font-weight:600;flex:1">${_highlight(group.name, tokens)}</span>
+          <span style="font-size:11px;color:var(--txt3)">${group.items.length} résultat${group.items.length>1?'s':''}</span>
+          <span style="font-size:11px;color:var(--blue)">Ouvrir →</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse">
+          <tbody>${rows}${moreRow}</tbody>
+        </table>
+      </div>`;
+  }).join('');
+}
+
+function setSearchType(type, btn) {
+  _searchTypeFilter = type;
+  document.querySelectorAll('#search-type-btns .filter-btn').forEach(b => b.classList.remove('on'));
+  document.querySelector('#search-type-filters .filter-btn').classList.remove('on');
+  btn.classList.add('on');
+  globalSearch(_lastQuery);
+}
+
+function filtSearchType(type, btn) {
+  _searchTypeFilter = type;
+  document.querySelectorAll('#search-type-filters .filter-btn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  globalSearch(_lastQuery);
+}
+
+function _escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function _highlight(text, tokens) {
+  if (!text) return '';
+  let s = _escHtml(String(text));
+  tokens.forEach(t => {
+    if (!t) return;
+    const re = new RegExp(`(${t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`, 'gi');
+    s = s.replace(re, '<mark style="background:rgba(91,158,249,.3);color:var(--txt);border-radius:2px;padding:0 1px">$1</mark>');
+  });
+  return s;
+}
 
 function openQuickPanel(mode) {
   _qpSev = mode;
