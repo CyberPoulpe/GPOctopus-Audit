@@ -881,7 +881,7 @@ def parse_drives_xml(content: str) -> list:
         root = ET.fromstring(content)
         for d in root.iter():
             if d.tag.endswith('}Drive') or d.tag == 'Drive':
-                _p = d.find('.//{*}Properties'); props = _p if _p is not None else d.find('Properties')
+                props = d.find('.//{*}Properties') or d.find('Properties')
                 if props is None:
                     props = d
                 path   = _xml_attr(props, 'path', 'uncPath', 'Path')
@@ -908,7 +908,7 @@ def parse_shortcuts_xml(content: str) -> list:
         root = ET.fromstring(content)
         for s in root.iter():
             if s.tag.endswith('}Shortcut') or s.tag == 'Shortcut':
-                _p = s.find('.//{*}Properties'); props = _p if _p is not None else s.find('Properties')
+                props = s.find('.//{*}Properties') or s.find('Properties')
                 if props is None:
                     props = s
                 name       = _xml_attr(props, 'name', 'shortcutPath')
@@ -936,7 +936,7 @@ def parse_scheduledtasks_xml(content: str) -> list:
         for t in root.iter():
             tag = t.tag.split('}')[-1] if '}' in t.tag else t.tag
             if tag in ('ScheduledTask', 'ImmediateTask', 'TaskV2', 'ImmediateTaskV2'):
-                _p = t.find('.//{*}Properties'); props = _p if _p is not None else t.find('Properties')
+                props = t.find('.//{*}Properties') or t.find('Properties')
                 if props is None:
                     props = t
                 name    = _xml_attr(props, 'name', 'runAs')
@@ -1023,7 +1023,7 @@ def parse_groups_xml(content: str) -> list:
         root = ET.fromstring(content)
         for g in root.iter():
             if g.tag.endswith('}Group') or g.tag == 'Group':
-                _p = g.find('.//{*}Properties'); props = _p if _p is not None else g.find('Properties')
+                props = g.find('.//{*}Properties') or g.find('Properties')
                 if props is None:
                     props = g
                 name    = _xml_attr(props, 'groupName', 'name')
@@ -1051,7 +1051,7 @@ def parse_envvars_xml(content: str) -> list:
         root = ET.fromstring(content)
         for e in root.iter():
             if e.tag.endswith('}EnvironmentVariable') or e.tag == 'EnvironmentVariable':
-                _p = e.find('.//{*}Properties'); props = _p if _p is not None else e.find('Properties')
+                props = e.find('.//{*}Properties') or e.find('Properties')
                 if props is None:
                     props = e
                 name   = _xml_attr(props, 'name', 'Name')
@@ -1319,6 +1319,174 @@ def parse_registry_pol(data: bytes) -> list:
 
 
 # ─── Moteur RSOP (agrégat de toutes les GPO) ─────────────────────────────────
+
+def detect_gpo_conflicts(gpos: list) -> list:
+    """
+    Détecte les conflits GPO : même paramètre configuré avec des valeurs DIFFÉRENTES
+    dans au moins deux GPO actives.
+
+    Distinction avec les redondances (true_duplicates) :
+      - Redondance  = même clé, même valeur  → inutile mais inoffensif
+      - Conflit     = même clé, valeurs diff → l'ordre d'application détermine
+                      ce qui s'applique réellement, souvent involontaire.
+
+    Règles de priorité Windows (simplifiées) :
+      - GPO liée à une OU enfant > GPO liée à une OU parente
+      - GPO Enforced écrase toujours les autres
+      - À priorité égale : ordre dans gPLink (dernier = priorité haute)
+      - Dans build_rsop : le dernier dans la liste gpos[] écrase le précédent
+
+    Retourne une liste de conflits triés par criticité.
+    """
+    # Clés / sections à ignorer — métadonnées ou valeurs légitimement variables
+    SKIP_KEYS = {
+        'unicode', 'signature', 'revision', 'passwordexpirywarning',
+        'lsaanonymousnamelookup', 'requirelogontochangepassword',
+        'maximumlogsize',  # peut varier légitimement par type de log
+    }
+    SKIP_SECTIONS = {'unicode', 'version'}
+    SKIP_KEY_PREFIXES = (
+        'software\\policies\\microsoft\\systemcertificates',
+        'software\\policies\\microsoft\\windows\\safer',
+        'software\\microsoft\\systemcertificates',
+    )
+
+    # Paramètres de sécurité critiques — un conflit dessus mérite un warning fort
+    SECURITY_SENSITIVE = {
+        'minimumpasswordlength', 'passwordcomplexity', 'passwordhistorysize',
+        'maximumpasswordage', 'lockoutbadcount', 'lockoutduration',
+        'nolmhash', 'lmcompatibilitylevel', 'restrictanonymous',
+        'enableguestaccount', 'auditlogonevents', 'auditaccountmanage',
+        'auditpolicychange', 'uselogoncredential', 'smb1',
+        'enablefirewall', 'enablelua', 'consentpromptbehavioradmin',
+        'requiresecuritysignature', 'ldapclientintegrity', 'runasppl',
+        'enablescriptblocklogging',
+    }
+
+    # Index : paramètre → liste de {gpo_name, gpo_guid, value, enforced}
+    # Structure : { (section, key_lower) : [ {gpo, value, enforced, ou} ] }
+    param_index: dict = {}
+
+    def _add(section: str, key: str, value: str, gpo: dict):
+        k = key.lower().strip()
+        if k in SKIP_KEYS:
+            return
+        if section in SKIP_SECTIONS:
+            return
+        if any(k.startswith(p) for p in SKIP_KEY_PREFIXES):
+            return
+        composite = (section, k)
+        if composite not in param_index:
+            param_index[composite] = []
+        is_enforced = any(l.get('enforced') for l in gpo.get('links', []))
+        param_index[composite].append({
+            'gpo_name':  gpo['name'],
+            'gpo_guid':  gpo['guid'],
+            'value':     str(value).strip(),
+            'enforced':  is_enforced,
+            'ou_count':  len(gpo.get('links', [])),
+        })
+
+    for gpo in gpos:
+        if gpo.get('flags') == '3':   # GPO entièrement désactivée
+            continue
+
+        # ── GptTmpl.inf (settings) ──
+        for section, params in gpo.get('settings', {}).items():
+            for k, v in params.items():
+                _add(section, k, v, gpo)
+
+        # ── Registry.pol (binary) ──
+        for (reg_key, vname, rtype, val) in gpo.get('registry_entries', []):
+            sk = reg_key.lower().split('\\')[-1]   # clé courte
+            _add('registry_pol', f"{reg_key}\\{vname}".lower(), str(val), gpo)
+
+        # ── Registry Values dans GptTmpl.inf ──
+        for k, v in gpo.get('settings', {}).get('registry_values', {}).items():
+            _add('registry_values', k.lower(), str(v), gpo)
+
+        # ── Registry.xml (préférences) ──
+        for scope in ('registry_xml_machine', 'registry_xml_user'):
+            for entry in gpo.get(scope, []):
+                full = (
+                    f"{entry.get('hive','').lower()}\\"
+                    f"{entry.get('key','').lower()}\\"
+                    f"{entry.get('name','').lower()}"
+                )
+                _add('registry_xml', full, str(entry.get('value', '')), gpo)
+
+    # ── Analyser les conflits ──
+    conflicts = []
+    for (section, key), entries in param_index.items():
+        if len(entries) < 2:
+            continue
+
+        # Dédupliquer par GPO (une GPO peut apparaître plusieurs fois si multiOU)
+        seen_guids: dict = {}
+        for e in entries:
+            g = e['gpo_guid']
+            if g not in seen_guids:
+                seen_guids[g] = e
+            else:
+                # Garder la version "enforced" si applicable
+                if e['enforced'] and not seen_guids[g]['enforced']:
+                    seen_guids[g] = e
+        unique_entries = list(seen_guids.values())
+
+        if len(unique_entries) < 2:
+            continue
+
+        # Récupérer toutes les valeurs distinctes
+        values = list({e['value'] for e in unique_entries})
+        if len(values) < 2:
+            continue   # Même valeur dans toutes les GPO → redondance, pas conflit
+
+        # Identifier la GPO gagnante (dernière dans la liste = priorité haute dans build_rsop)
+        # Parmi les GPO en conflit, la gagnante est celle avec enforced=True ou la dernière
+        enforced_entries = [e for e in unique_entries if e['enforced']]
+        winner = enforced_entries[-1] if enforced_entries else unique_entries[-1]
+        losers = [e for e in unique_entries if e['gpo_guid'] != winner['gpo_guid']]
+
+        # Niveau de criticité du conflit
+        key_short = key.split('\\')[-1].lower()
+        is_security = key_short in SECURITY_SENSITIVE or section in (
+            'password_policy', 'system_access', 'event_audit'
+        )
+        severity = 'conflict_high' if is_security else 'conflict_low'
+
+        # Label lisible
+        section_labels = {
+            'password_policy':  'Politique de mots de passe',
+            'system_access':    'Accès système',
+            'event_audit':      'Audit',
+            'registry_pol':     'Registre (Registry.pol)',
+            'registry_values':  'Registre (GptTmpl.inf)',
+            'registry_xml':     'Registre (préférences XML)',
+            'kerberos_policy':  'Stratégie Kerberos',
+            'privilege_rights': 'Droits utilisateurs',
+        }
+        section_label = section_labels.get(section, section)
+
+        conflicts.append({
+            'section':       section,
+            'section_label': section_label,
+            'key':           key,
+            'key_short':     key_short,
+            'severity':      severity,
+            'is_security':   is_security,
+            'values':        values,
+            'entries':       unique_entries,
+            'winner':        winner,
+            'losers':        losers,
+            'enforced_wins': bool(enforced_entries),
+            'gpo_count':     len(unique_entries),
+            'label':         f"{section_label} → {key_short}",
+        })
+
+    # Trier : sécurité d'abord, puis nombre de GPO en conflit
+    conflicts.sort(key=lambda c: (0 if c['is_security'] else 1, -c['gpo_count']))
+    return conflicts[:100]   # cap à 100 pour ne pas exploser le JSON
+
 
 def build_rsop(gpos: list) -> tuple[dict, list]:
     """
@@ -2058,6 +2226,54 @@ def generate_demo_data() -> list:
             'settings': {'password_policy': {}, 'system_access': {}, 'event_audit': {}},
             'registry_entries': [],
         },
+        # ── GPO générant des conflits démontrables ──
+        {
+            'name': 'GPO_Audit_Serveurs',
+            'guid': '{E45F7G81-2222-3333-4444-555566667777}',
+            'sysvol_path': '', 'version': '4', 'flags': '0',
+            'created': '2021-09-01', 'changed': '2023-06-15',
+            'links': [{'ou': 'OU=Servers,DC=corp,DC=local', 'flags': 0, 'enforced': False, 'disabled': False}],
+            'settings': {
+                'password_policy': {
+                    # Conflit sécurité : longueur différente de Default Domain Policy (8) et GPO_Sécurité (16)
+                    'minimumpasswordlength': '12',
+                    'maximumpasswordage': '180',   # Conflit avec Default (42) et Sécurité (90)
+                },
+                'event_audit': {
+                    # Conflit audit : valeur différente de GPO_Sécurité_Postes (3)
+                    'auditlogonevents':   '1',    # Succès seulement vs Succès+Échec
+                    'auditaccountmanage': '2',    # Échec seulement
+                },
+                'system_access': {
+                    'lmcompatibilitylevel': '3',   # Conflit : Default=1, Sécurité=5, ici=3
+                    'lockoutbadcount': '15',        # Conflit : Default=0, Sécurité=5, ici=15
+                },
+            },
+            'registry_entries': [
+                # Conflit registre : pare-feu OFF ici vs ON dans GPO_Sécurité
+                (r'hklm\software\policies\microsoft\windowsfirewall\domainprofile',
+                 'enablefirewall', 4, 0),
+            ],
+        },
+        {
+            'name': 'GPO_Conformité_RGPD',
+            'guid': '{F56G8H92-3333-4444-5555-666677778888}',
+            'sysvol_path': '', 'version': '2', 'flags': '0',
+            'created': '2022-05-20', 'changed': '2022-11-30',
+            'links': [{'ou': 'OU=Workstations,DC=corp,DC=local', 'flags': 0, 'enforced': False, 'disabled': False}],
+            'settings': {
+                'password_policy': {
+                    # Conflit : encore une valeur différente pour minimumpasswordlength
+                    'minimumpasswordlength': '10',
+                    'passwordhistorysize': '12',    # Conflit avec Default (5) et Sécurité (24)
+                },
+                'system_access': {
+                    'lockoutduration': '5',         # Conflit : Sécurité=30, ici=5
+                    'nolmhash': '1',                # Pas de conflit (même valeur que Sécurité)
+                },
+            },
+            'registry_entries': [],
+        },
     ]
 
 
@@ -2552,6 +2768,11 @@ def analyze_gpos(gpos: list) -> dict:
     # Trier par nombre de GPO concernées
     true_duplicates.sort(key=lambda x: len(x['gpos']), reverse=True)
 
+    # ── Détection des conflits GPO ──────────────────────────────────────────
+    gpo_conflicts = detect_gpo_conflicts(gpos)
+    conflicts_high = sum(1 for c in gpo_conflicts if c['is_security'])
+    conflicts_low  = sum(1 for c in gpo_conflicts if not c['is_security'])
+
     criticals = sum(1 for f in global_findings if f['severity'] == 'critical')
     warnings  = sum(1 for f in global_findings if f['severity'] == 'warning')
     infos     = sum(1 for f in global_findings if f['severity'] == 'info')
@@ -2569,6 +2790,9 @@ def analyze_gpos(gpos: list) -> dict:
         'orphan_gpos': orphan_gpos,
         'redundant_params': dict(list(redundant.items())[:15]),
         'true_duplicates': true_duplicates[:50],
+        'gpo_conflicts': gpo_conflicts,
+        'conflicts_high': conflicts_high,
+        'conflicts_low':  conflicts_low,
         'gpo_reports': sorted(gpo_reports, key=lambda g: g['score']),
         'all_findings': global_findings,
         'generated_at': datetime.now().strftime('%d/%m/%Y %H:%M'),
@@ -2879,6 +3103,10 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
   <div class="nav-group">
     <div class="nav-label">Résultats</div>
     <div class="nav-item" onclick="nav('compliant',this)"><span class="nav-icon">✓</span>Conformes ({{ data.compliant_count }})</div>
+    <div class="nav-item" onclick="nav('conflicts',this)">
+      <span class="nav-icon">⚡</span>Conflits GPO
+      {% if data.conflicts_high > 0 %}<span class="nav-badge">{{ data.conflicts_high }}</span>{% endif %}
+    </div>
     <div class="nav-item" onclick="nav('orphans',this)"><span class="nav-icon">◌</span>Orphelines ({{ data.orphan_count }})</div>
   </div>
 
@@ -2924,6 +3152,12 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
       <div class="v">{{ data.orphan_count }}</div><div class="l">Orphelines</div>
       <div style="font-size:10px;color:var(--txt3);margin-top:4px">Cliquer pour voir →</div>
       <span class="tooltip">GPO non liées à une OU — cliquez pour voir la liste</span>
+    </div>
+    <div class="mc clickable has-tooltip" onclick="nav('conflicts',document.querySelector('[onclick*=conflicts]'))" style="cursor:pointer">
+      <div class="v" style="color:{% if data.conflicts_high > 0 %}var(--red){% else %}var(--amber){% endif %}">{{ data.gpo_conflicts|length }}</div>
+      <div class="l">Conflits GPO</div>
+      <div style="font-size:10px;color:var(--txt3);margin-top:4px">{{ data.conflicts_high }} critique(s) →</div>
+      <span class="tooltip">Même paramètre, valeurs différentes dans plusieurs GPO — l'ordre d'application détermine ce qui s'applique</span>
     </div>
     <div class="mc clickable has-tooltip" onclick="openQuickPanel('all')" style="cursor:pointer">
       <div class="v">{{ data.gpo_count }}</div><div class="l">GPO totales</div>
@@ -3095,6 +3329,127 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
     </div>
   </div>
   {% endfor %}
+</div>
+
+<!-- ══ CONFLICTS ══ -->
+<div id="view-conflicts" class="view">
+  <div class="view-header">
+    <div class="view-title">⚡ Conflits GPO</div>
+    <div class="view-sub">Même paramètre configuré avec des valeurs différentes dans plusieurs GPO — l'ordre d'application détermine ce qui s'applique réellement</div>
+  </div>
+
+  {% if data.gpo_conflicts %}
+  {% if data.conflicts_high > 0 %}
+  <div class="warn-box" style="border-color:var(--red);background:var(--red-dim);margin-bottom:16px">
+    <strong style="color:var(--red)">⚡ {{ data.conflicts_high }} conflit(s) sur des paramètres de sécurité sensibles</strong> —
+    la GPO gagnante peut masquer une mauvaise configuration appliquée dans une autre GPO.
+    Vérifiez l'ordre d'application et supprimez la valeur dans la GPO perdante.
+  </div>
+  {% endif %}
+
+  <div class="info-box">
+    <strong>Comment lire un conflit :</strong> la GPO <strong>gagnante</strong> est celle dont la valeur s'applique réellement (priorité la plus haute ou Enforced).
+    Les GPO <strong>perdantes</strong> configurent le même paramètre avec une valeur différente — leurs valeurs sont écrasées silencieusement.
+    Un conflit n'est pas toujours une erreur, mais il indique souvent une GPO oubliée ou une configuration incohérente.
+  </div>
+
+  <div class="toolbar">
+    <div class="search-box">
+      <span class="search-icon">⌕</span>
+      <input type="text" placeholder="Rechercher un conflit…" oninput="searchConflicts(this.value)">
+    </div>
+    <button class="filter-btn on"  onclick="filtConflicts('all',this)">Tous ({{ data.gpo_conflicts|length }})</button>
+    <button class="filter-btn"     onclick="filtConflicts('high',this)">Sécurité ({{ data.conflicts_high }})</button>
+    <button class="filter-btn"     onclick="filtConflicts('low',this)">Autres ({{ data.conflicts_low }})</button>
+  </div>
+
+  <div id="conflicts-list">
+  {% for c in data.gpo_conflicts %}
+  <div class="finding-card stagger-item conflict-card"
+       data-sec="{{ 'true' if c.is_security else 'false' }}"
+       data-txt="{{ c.key_short }} {{ c.section_label|lower }} {{ c.label|lower }}">
+    <div class="fc-head" onclick="togFC(this)">
+      <div class="sev-dot" style="background:{% if c.is_security %}var(--red){% else %}var(--amber){% endif %}"></div>
+      <div style="flex:1">
+        <div class="fc-title">{{ c.key_short }}</div>
+        <div style="font-size:11px;color:var(--txt3);margin-top:1px">
+          {{ c.section_label }} · {{ c.gpo_count }} GPO en conflit
+          {% if c.enforced_wins %}<span style="color:var(--amber);margin-left:6px">⚑ Enforced prioritaire</span>{% endif %}
+        </div>
+      </div>
+      <span class="sev-pill {% if c.is_security %}critical{% else %}warning{% endif %}" style="margin-right:8px">
+        {% if c.is_security %}sécurité{% else %}configuration{% endif %}
+      </span>
+      <div class="fc-arr">▶</div>
+    </div>
+    <div class="fc-body">
+      <!-- Valeurs en conflit -->
+      <div style="margin-bottom:12px">
+        <div style="font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Valeurs en conflit</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          {% for v in c.values %}
+          <span style="font-size:12px;padding:4px 10px;border-radius:6px;font-family:'DM Mono';
+                       background:{% if v == c.winner.value %}var(--green-dim){% else %}var(--red-dim){% endif %};
+                       color:{% if v == c.winner.value %}var(--green){% else %}var(--red){% endif %};
+                       border:1px solid {% if v == c.winner.value %}var(--green){% else %}var(--red){% endif %}">
+            {% if v == c.winner.value %}✔ {{ v }} (appliquée){% else %}✘ {{ v }} (écrasée){% endif %}
+          </span>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- GPO gagnante -->
+      <div style="margin-bottom:8px">
+        <div style="font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">GPO gagnante</div>
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--green-dim);border-radius:8px;border:1px solid var(--green)">
+          <span style="color:var(--green)">✔</span>
+          <span style="font-size:13px;font-weight:500;cursor:pointer;color:var(--green)" onclick="showGPODetail('{{ c.winner.gpo_guid }}')">{{ c.winner.gpo_name }}</span>
+          <span style="font-size:11px;font-family:'DM Mono';color:var(--txt2);margin-left:4px">= {{ c.winner.value }}</span>
+          {% if c.winner.enforced %}<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:var(--amber-dim);color:var(--amber)">ENFORCED</span>{% endif %}
+        </div>
+      </div>
+
+      <!-- GPO perdantes -->
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">GPO perdante(s) — valeur écrasée</div>
+        {% for loser in c.losers %}
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--red-dim);border-radius:8px;border:1px solid var(--red);margin-bottom:4px">
+          <span style="color:var(--red)">✘</span>
+          <span style="font-size:13px;font-weight:500;cursor:pointer;color:var(--red)" onclick="showGPODetail('{{ loser.gpo_guid }}')">{{ loser.gpo_name }}</span>
+          <span style="font-size:11px;font-family:'DM Mono';color:var(--txt2);margin-left:4px">= {{ loser.value }}</span>
+          {% if loser.enforced %}<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:var(--amber-dim);color:var(--amber)">ENFORCED</span>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+
+      <!-- Chemin complet -->
+      <div style="font-size:11px;color:var(--txt3);font-family:'DM Mono';padding:6px 0;border-top:1px solid var(--border)">
+        {{ c.section_label }} → {{ c.key }}
+      </div>
+
+      <!-- Recommandation -->
+      <div class="fc-reco" style="margin-top:8px">
+        {% if c.is_security %}
+        ⚠ Paramètre de sécurité sensible — vérifiez que la valeur appliquée ({{ c.winner.value }}, GPO "{{ c.winner.gpo_name }}") est bien celle souhaitée.
+        Supprimez ce paramètre de la/les GPO perdante(s) pour éliminer l'ambiguïté.
+        {% else %}
+        Vérifiez si la valeur dans la GPO perdante est intentionnelle.
+        Si non, supprimez-la pour éviter toute confusion lors d'une future modification de priorité GPO.
+        {% endif %}
+        {% if c.enforced_wins %}
+        La GPO gagnante est Enforced — elle s'applique en priorité absolue quelle que soit la hiérarchie OU.
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+  </div>
+
+  {% else %}
+  <div style="text-align:center;padding:60px;color:var(--txt3)">
+    🎉 Aucun conflit GPO détecté — vos GPO sont cohérentes entre elles.
+  </div>
+  {% endif %}
 </div>
 
 <!-- ══ ORPHANS ══ -->
@@ -3543,6 +3898,25 @@ function renderByOU(filter) {
 }
 function searchOU(q) { renderByOU(q.toLowerCase()); }
 
+// ── Conflict filters ──
+function filtConflicts(mode, btn) {
+  document.querySelectorAll('#view-conflicts .filter-btn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  document.querySelectorAll('.conflict-card').forEach(c => {
+    const isSec = c.dataset.sec === 'true';
+    let show = true;
+    if (mode === 'high') show = isSec;
+    if (mode === 'low')  show = !isSec;
+    c.style.display = show ? '' : 'none';
+  });
+}
+function searchConflicts(q) {
+  q = q.toLowerCase();
+  document.querySelectorAll('.conflict-card[data-txt]').forEach(c => {
+    c.style.display = (!q || c.dataset.txt.includes(q)) ? '' : 'none';
+  });
+}
+
 // ── Compare ──
 function populateCompareSelects() {}
 
@@ -3552,6 +3926,7 @@ const _findingsData    = {{ data.all_findings | tojson }};
 const _compliantData   = {{ data.compliant_rules | tojson }};
 const _orphanData      = {{ data.orphan_gpos | tojson }};
 const _duplicatesData  = {{ data.true_duplicates | tojson }};
+const _conflictsData   = {{ data.gpo_conflicts | tojson }};
 
 function openQuickPanel(mode) {
   _qpSev = mode;
