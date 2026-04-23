@@ -3331,20 +3331,6 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
   </div>
 
   <div class="nav-group">
-    <div class="nav-group" style="padding-bottom:0">
-      <div style="padding:10px 16px 6px">
-        <div style="position:relative">
-          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--txt3);font-size:14px;pointer-events:none">⌕</span>
-          <input id="global-search-input" type="text"
-            placeholder="Rechercher dans toutes les GPO…"
-            style="width:100%;padding:8px 10px 8px 30px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--txt);font-size:12px;font-family:'Outfit';outline:none"
-            oninput="globalSearch(this.value)"
-            onfocus="if(this.value) nav('search', document.querySelector('[onclick*=search]'))"
-          >
-        </div>
-      </div>
-    </div>
-
     <div class="nav-label">Vue d'ensemble</div>
     <div class="nav-item active" onclick="nav('dashboard',this)"><span class="nav-icon">◈</span>Tableau de bord</div>
     <div class="nav-item" onclick="nav('priorities',this)">
@@ -4290,7 +4276,6 @@ let _lastQuery = '';
 
 function quickSearch(q) {
   document.getElementById('search-main-input').value = q;
-  document.getElementById('global-search-input').value = q;
   nav('search', document.querySelector('[onclick*="nav(\'search\'"]') ||
       document.querySelector('.nav-item:nth-child(1)'));
   globalSearch(q);
@@ -4304,9 +4289,7 @@ function globalSearch(q) {
   // Sync les deux champs UNIQUEMENT si la valeur est vraiment différente
   // (évite de réinjecter une valeur trimée qui ferait sauter le curseur)
   const mainInput = document.getElementById('search-main-input');
-  const sideInput = document.getElementById('global-search-input');
   if (mainInput && document.activeElement !== mainInput && mainInput.value !== q) mainInput.value = q;
-  if (sideInput && document.activeElement !== sideInput && sideInput.value !== q) sideInput.value = q;
 
   const emptyState  = document.getElementById('search-empty-state');
   const resultsDiv  = document.getElementById('search-results');
