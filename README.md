@@ -110,14 +110,15 @@ Le rapport généré est un fichier HTML **autonome** (aucun serveur requis) ave
 
 | Section | Contenu |
 |---------|---------|
-| **Tableau de bord** | Score global, graphiques, actions prioritaires |
-| **Priorités** | Findings triés par criticité, GPO à modifier |
-| **Constatations RSOP** | Ce qui s'applique réellement après fusion des GPO |
+| **Tableau de bord** | Score global, graphiques, actions prioritaires, accès rapide par sévérité |
+| **Priorités** | Findings triés par criticité, GPO à modifier identifiées |
+| **Constatations RSOP** | Ce qui s'applique réellement après fusion des GPO (critical / warning / info) |
 | **GPO par GPO** | Contenu détaillé de chaque GPO (sécurité, registre, imprimantes, scripts...) |
 | **Par type** | Toutes les GPO regroupées par type de contenu |
 | **Par OU** | Quelles GPO s'appliquent sur quelle unité organisationnelle |
-| **Conformes** | Contrôles correctement configurés |
-| **Orphelines** | GPO non liées à une OU + paramètres redondants |
+| **Conformes** | Contrôles correctement configurés dans le RSOP |
+| **Améliorations** | Pistes de durcissement avancées — CIS/ANSSI niveau supérieur (voir ci-dessous) |
+| **Orphelines** | GPO non liées à une OU + paramètres redondants entre GPO |
 
 ---
 
@@ -149,6 +150,30 @@ Le rapport généré est un fichier HTML **autonome** (aucun serveur requis) ave
 | LSA-001 | RunAsPPL non activé (Mimikatz) | MS KB3033929 |
 | RDP-001 | NLA non requis pour RDP | CVE-2019-0708 |
 | PS-001 | Script Block Logging PowerShell désactivé | CIS 18.9.100.1 |
+
+### Améliorations (enhancement) — durcissement avancé
+
+Ces règles ne signalent pas une faille mais proposent un niveau de sécurité supérieur, vérifiable via GPO/registre. Chaque suggestion inclut le chemin GPO exact et la clé de registre.
+
+| ID | Catégorie | Référence |
+|----|-----------|-----------|
+| ENH-NTLM-001 | Audit NTLM sortant non activé sur les DC | ANSSI CERTFR-2021-DUR-001 · CIS 2.3.11.9 |
+| ENH-NTLM-002 | Restriction NTLM entrant dans le domaine | ANSSI CERTFR-2021-DUR-001 · CIS 2.3.11.10 |
+| ENH-KERB-001 | RC4 Kerberos non désactivé (Kerberoasting) | CIS 2.3.11.4 · ANSSI R-07 |
+| ENH-KERB-002 | Kerberos Armoring (FAST) non activé | MS Security Baseline 2022 |
+| ENH-AUDIT-001 | Audit avancé non prioritaire sur l'audit legacy | CIS 17.1.1 · ANSSI R-09 |
+| ENH-AUDIT-002 | Transcription PowerShell non activée | CIS 18.9.100.2 · ANSSI R-09 |
+| ENH-AUDIT-003 | Module Logging PowerShell non activé | CIS 18.9.100.3 · ANSSI R-09 |
+| ENH-SMB-001 | Signature SMB non requise côté serveur | CIS 2.3.8.2 · MS Baseline 2022 |
+| ENH-SMB-002 | Chiffrement SMB non activé | MS Baseline 2022 · KB5040266 |
+| ENH-LSA-001 | Mode audit PPL LSASS non configuré | MS KB3033929 · ANSSI R-08 |
+| ENH-AUTH-001 | Fine-Grained Password Policy non détectée | ANSSI R-03 |
+| ENH-AUTH-002 | LAPS non détecté via GPO | ANSSI R-30 · CIS 18.3.2 |
+| ENH-RDP-001 | Restricted Admin Mode RDP non activé | ANSSI R-12 · MS KB2871997 |
+| ENH-RDP-002 | Chiffrement RDP non forcé au niveau maximum | CIS 18.10.56.3 |
+| ENH-SYS-001 | Credential Guard non configuré | MS Baseline 2022 · ANSSI R-08 |
+| ENH-SYS-002 | Protected Users group non utilisé | ANSSI R-08 · MS KB2871997 |
+| ENH-SYS-003 | Timeout sessions RDP déconnectées non configuré | CIS 18.10.56.2 |
 
 ---
 
