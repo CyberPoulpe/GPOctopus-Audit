@@ -1,7 +1,7 @@
 # 🐙 GPOctopus
 
 > Audit de sécurité des GPO Active Directory — collecte LDAP + analyse SYSVOL, rapport HTML interactif.
-> Référentiels CIS Benchmarks · ANSSI · Microsoft Security Baseline.
+> Référentiels CIS Benchmarks · ANSSI · Microsoft Security Baseline 2022.
 
 ---
 
@@ -13,15 +13,18 @@
 - **Lecture SYSVOL via SMB direct** (impacket) — pas besoin de `mount.cifs`
 - **Montage SYSVOL automatique** si `cifs-utils` est disponible
 - **Construction du RSOP** : fusion de toutes les GPO comme le ferait Windows
-- **50+ règles d'audit** couvrant :
+- **70+ règles d'audit** couvrant :
   - Politique de mots de passe (longueur, complexité, historique, expiration)
   - Authentification réseau (NTLMv1, LM hash, WDigest, LDAP signing)
   - UAC & élévation de privilèges (LocalAccountTokenFilterPolicy, EnableLUA)
   - Audit des événements (connexions, comptes, politiques, PowerShell)
   - Registre (SMBv1, pare-feu, AutoRun, Credential Guard, PrintNightmare)
   - Kerberos, RDP/NLA, LSASS RunAsPPL
-- **Rapport HTML interactif** : score global, graphiques, détail par GPO, par OU, par type de contenu
+- **17 règles d'amélioration** (enhancement) : durcissement avancé sourcé CIS/ANSSI
+- **Détection des conflits GPO** : même paramètre, valeurs différentes — gagnant/perdant identifiés
 - **Détection des redondances** : mêmes paramètres dans plusieurs GPO
+- **Recherche globale cross-catégories** : cherche dans tous les types de contenu GPO
+- **Rapport HTML interactif** autonome — aucun serveur requis, chargement optimisé
 - **Mode démo** sans AD pour tester le rapport
 - **Sauvegarde de la config** pour relancer rapidement
 
@@ -67,7 +70,7 @@ Les dépendances Python sont **installées automatiquement** au premier lancemen
 python3 GPOctopus.py
 ```
 
-Le wizard te guide à travers :
+Le wizard guide à travers :
 1. Saisie des paramètres AD (DC, domaine, utilisateur, mot de passe)
 2. Test de connectivité LDAP automatique
 3. Tentative de montage du SYSVOL
@@ -106,19 +109,47 @@ python3 GPOctopus.py --dc ... --json -o rapport.json
 
 ## 📊 Rapport HTML
 
-Le rapport généré est un fichier HTML **autonome** (aucun serveur requis) avec :
+Le rapport généré est un fichier HTML **autonome** (aucun serveur requis) avec un chargement optimisé (lazy rendering, données chargées à la demande).
 
 | Section | Contenu |
 |---------|---------|
 | **Tableau de bord** | Score global, graphiques, actions prioritaires, accès rapide par sévérité |
 | **Priorités** | Findings triés par criticité, GPO à modifier identifiées |
+| **Recherche GPO** | Moteur de recherche cross-catégories dans toutes les GPO |
 | **Constatations RSOP** | Ce qui s'applique réellement après fusion des GPO (critical / warning / info) |
-| **GPO par GPO** | Contenu détaillé de chaque GPO (sécurité, registre, imprimantes, scripts...) |
+| **GPO par GPO** | Contenu détaillé de chaque GPO (sécurité, registre, imprimantes, scripts…) |
 | **Par type** | Toutes les GPO regroupées par type de contenu |
 | **Par OU** | Quelles GPO s'appliquent sur quelle unité organisationnelle |
 | **Conformes** | Contrôles correctement configurés dans le RSOP |
-| **Améliorations** | Pistes de durcissement avancées — CIS/ANSSI niveau supérieur (voir ci-dessous) |
-| **Orphelines** | GPO non liées à une OU + paramètres redondants entre GPO |
+| **Améliorations** | Pistes de durcissement avancées — CIS/ANSSI niveau supérieur |
+| **Conflits GPO** | Même paramètre, valeurs différentes dans plusieurs GPO — gagnant/perdant identifiés |
+| **Orphelines** | GPO non liées à une OU + paramètres redondants |
+
+---
+
+## 🔎 Moteur de recherche GPO
+
+La vue **Recherche GPO** permet de chercher dans l'ensemble du contenu SYSVOL collecté :
+
+- **Recherche multi-mots avec ET inter-catégories** : `RDS imprimante` trouve les GPO qui parlent à la fois de RDS et d'imprimantes, même dans des paramètres différents
+- **Raccourcis rapides** : Imprimantes, Lecteurs, Scripts, Tâches, Services, Registre, Groupes, Liens OU
+- **Résultats groupés par GPO** avec surbrillance des termes et clic pour ouvrir la GPO directement
+- **Filtres dynamiques** par type de contenu selon les résultats
+- **Suggestion intelligente** : si aucune GPO ne contient tous les termes ensemble, indique lequel donne des résultats seul
+
+Types de contenu indexés : paramètres de sécurité, imprimantes, lecteurs réseau, raccourcis, scripts (startup/shutdown/logon/logoff), tâches planifiées, registre (Registry.pol + XML + GptTmpl), services, groupes locaux, variables d'environnement, copie de fichiers, audit avancé, liens OU.
+
+---
+
+## ⚡ Détection des conflits GPO
+
+GPOctopus détecte les cas où le **même paramètre est configuré avec des valeurs différentes** dans plusieurs GPO actives — ce qui est distinct d'une simple redondance (même valeur).
+
+Pour chaque conflit, le rapport indique :
+- La **GPO gagnante** (valeur appliquée réellement, enforced prioritaire)
+- Les **GPO perdantes** (valeurs écrasées silencieusement)
+- Le niveau de criticité (sécurité critique / configuration)
+- La recommandation pour résoudre l'ambiguïté
 
 ---
 
