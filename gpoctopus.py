@@ -3055,45 +3055,45 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <title>GPOctopus Audit — {{ data.generated_at }}</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap');
 
 [data-theme="dark"]{
-  --bg:#0c0e14;--surface:#131620;--surface2:#1a1e2e;--surface3:#20253a;
-  --border:#252a3e;--border2:#2f3550;
-  --txt:#dde2f0;--txt2:#7a84a8;--txt3:#454d6e;
-  --red:#ff5f5f;--red-dim:rgba(255,95,95,.12);--red-glow:rgba(255,95,95,.25);
-  --amber:#ffaa40;--amber-dim:rgba(255,170,64,.12);
-  --green:#3dd68c;--green-dim:rgba(61,214,140,.12);
-  --blue:#5b9ef9;--blue-dim:rgba(91,158,249,.12);
-  --purple:#a78bfa;--teal:#2dd4bf;
-  --chart1:#5b9ef9;--chart2:#ff5f5f;--chart3:#ffaa40;--chart4:#3dd68c;--chart5:#a78bfa;
+  --bg:#0f1117;--surface:#161b27;--surface2:#1c2133;--surface3:#222840;
+  --border:#252d42;--border2:#2e3852;
+  --txt:#c8cfe0;--txt2:#6b7899;--txt3:#3d4a68;
+  --red:#e05252;--red-dim:rgba(224,82,82,.1);--red-glow:rgba(224,82,82,.2);
+  --amber:#d4892a;--amber-dim:rgba(212,137,42,.1);
+  --green:#3a9e72;--green-dim:rgba(58,158,114,.1);
+  --blue:#4a7fd4;--blue-dim:rgba(74,127,212,.1);
+  --purple:#8b6ddb;--teal:#2ab5a0;
+  --chart1:#4a7fd4;--chart2:#e05252;--chart3:#d4892a;--chart4:#3a9e72;--chart5:#8b6ddb;
 }
 [data-theme="light"]{
-  --bg:#f4f5f8;--surface:#ffffff;--surface2:#f0f2f7;--surface3:#e8eaf2;
-  --border:#dde0ec;--border2:#c8ccdc;
-  --txt:#1a1f36;--txt2:#5a6285;--txt3:#9aa0c0;
-  --red:#d63c3c;--red-dim:rgba(214,60,60,.08);--red-glow:rgba(214,60,60,.2);
-  --amber:#c47a00;--amber-dim:rgba(196,122,0,.08);
-  --green:#1a7a50;--green-dim:rgba(26,122,80,.08);
-  --blue:#2460c4;--blue-dim:rgba(36,96,196,.08);
-  --purple:#6d44d0;--teal:#0e8a7e;
-  --chart1:#2460c4;--chart2:#d63c3c;--chart3:#c47a00;--chart4:#1a7a50;--chart5:#6d44d0;
+  --bg:#f2f4f8;--surface:#ffffff;--surface2:#eef0f6;--surface3:#e5e8f0;
+  --border:#d8dce8;--border2:#c4c9d8;
+  --txt:#1e2336;--txt2:#4e5878;--txt3:#8890aa;
+  --red:#c03030;--red-dim:rgba(192,48,48,.07);--red-glow:rgba(192,48,48,.15);
+  --amber:#a86a10;--amber-dim:rgba(168,106,16,.07);
+  --green:#1e7a54;--green-dim:rgba(30,122,84,.07);
+  --blue:#2655b0;--blue-dim:rgba(38,85,176,.07);
+  --purple:#5c3fc0;--teal:#1a8a78;
+  --chart1:#2655b0;--chart2:#c03030;--chart3:#a86a10;--chart4:#1e7a54;--chart5:#5c3fc0;
 }
 
-*{box-sizing:border-box;margin:0;padding:0;transition:background .2s,color .2s,border-color .2s}
+*{box-sizing:border-box;margin:0;padding:0}
 html{font-size:14px}
-body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;overflow-x:hidden}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;overflow-x:hidden}
 
 /* ── Sidebar ── */
 .sidebar{position:fixed;top:0;left:0;width:230px;height:100vh;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:200;overflow-y:auto}
 .sb-logo{padding:22px 20px 16px;border-bottom:1px solid var(--border)}
 .sb-logo h1{font-size:16px;font-weight:700;letter-spacing:-.4px;display:flex;align-items:center;gap:8px}
 .sb-logo p{font-size:11px;color:var(--txt3);margin-top:3px}
-.sb-score{margin:14px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;align-items:center;gap:14px}
+.sb-score{margin:14px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:12px;display:flex;align-items:center;gap:12px;border-left:2px solid var(--border2)}
 .sb-score-ring{position:relative;width:56px;height:56px;flex-shrink:0}
 .sb-score-ring svg{transform:rotate(-90deg)}
 .sb-score-val{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
-.sb-score-val .n{font-size:18px;font-weight:700;font-family:'DM Mono';line-height:1}
+.sb-score-val .n{font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace;line-height:1}
 .sb-score-val .l{font-size:9px;color:var(--txt3)}
 .sb-score-info{flex:1;min-width:0}
 .sb-score-info .label{font-size:11px;font-weight:600}
@@ -3102,9 +3102,9 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
 .nav-label{font-size:10px;font-weight:600;color:var(--txt3);letter-spacing:.8px;text-transform:uppercase;padding:0 20px 6px}
 .nav-item{display:flex;align-items:center;gap:10px;padding:8px 20px;font-size:13px;color:var(--txt2);cursor:pointer;border-left:2px solid transparent;transition:all .15s}
 .nav-item:hover{color:var(--txt);background:var(--surface2)}
-.nav-item.active{color:var(--blue);border-left-color:var(--blue);background:var(--blue-dim);font-weight:500}
+.nav-item.active{color:var(--txt);border-left-color:var(--blue);background:var(--surface2);font-weight:500}
 .nav-icon{font-size:15px;width:18px;text-align:center;flex-shrink:0}
-.nav-badge{margin-left:auto;font-size:10px;padding:1px 7px;border-radius:20px;background:var(--red-dim);color:var(--red);font-weight:600}
+.nav-badge{margin-left:auto;font-size:10px;padding:0 5px;border-radius:2px;background:var(--red-dim);color:var(--red);font-weight:600;font-family:'JetBrains Mono',monospace}
 .sb-footer{margin-top:auto;padding:14px 20px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
 .theme-toggle{width:34px;height:18px;background:var(--surface3);border-radius:9px;cursor:pointer;position:relative;border:1px solid var(--border2)}
 .theme-toggle::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--txt2);transition:left .2s}
@@ -3121,34 +3121,34 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
 
 /* ── Metric cards ── */
 .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:28px}
-.mc{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;position:relative;overflow:hidden;cursor:default;transition:transform .15s,box-shadow .15s}
-.mc:hover{transform:translateY(-2px)}
-.mc::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;border-radius:12px 12px 0 0}
-.mc.red::before{background:var(--red)}
-.mc.amber::before{background:var(--amber)}
-.mc.green::before{background:var(--green)}
-.mc.blue::before{background:var(--blue)}
-.mc .v{font-size:30px;font-weight:700;font-family:'DM Mono';line-height:1;margin-bottom:4px}
-.mc .l{font-size:11px;color:var(--txt2);text-transform:uppercase;letter-spacing:.3px}
+.mc{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:14px 16px;position:relative;cursor:default;}
+.mc:hover{background:var(--surface2)}
+
+
+
+
+
+.mc .v{font-size:26px;font-weight:600;font-family:'JetBrains Mono',monospace;line-height:1;margin-bottom:4px}
+.mc .l{font-size:11px;color:var(--txt3);letter-spacing:.2px}
 .mc.red .v{color:var(--red)}.mc.amber .v{color:var(--amber)}.mc.green .v{color:var(--green)}.mc.blue .v{color:var(--blue)}
 
 /* ── Charts ── */
 .charts-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
-.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px}
+.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:16px}
 .chart-title{font-size:13px;font-weight:600;margin-bottom:16px;color:var(--txt)}
 .chart-wrap{position:relative}
 
 /* ── Priority list ── */
-.prio-item{background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden;cursor:pointer;transition:border-color .15s,transform .1s}
-.prio-item:hover{border-color:var(--border2);transform:translateX(2px)}
+.prio-item{background:var(--surface);border:1px solid var(--border);border-radius:3px;margin-bottom:6px;overflow:hidden;cursor:pointer;}
+.prio-item:hover{border-color:var(--border2);background:var(--surface2)}
 .prio-item.open{border-color:var(--border2)}
 .prio-head{display:flex;align-items:center;gap:12px;padding:13px 16px}
-.prio-num{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;font-family:'DM Mono';flex-shrink:0}
+.prio-num{width:24px;height:24px;border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;flex-shrink:0}
 .prio-num.critical{background:var(--red-dim);color:var(--red)}
 .prio-num.warning{background:var(--amber-dim);color:var(--amber)}
 .prio-title{flex:1;font-size:13px;font-weight:500}
-.prio-ref{font-size:10px;color:var(--txt3);font-family:'DM Mono';margin-top:2px}
-.sev-pill{font-size:10px;padding:2px 10px;border-radius:20px;font-weight:600;flex-shrink:0}
+.prio-ref{font-size:10px;color:var(--txt3);font-family:'JetBrains Mono',monospace;margin-top:2px}
+.sev-pill{font-size:10px;padding:1px 7px;border-radius:2px;font-weight:600;flex-shrink:0;font-family:'JetBrains Mono',monospace;letter-spacing:.3px}
 .sev-pill.critical{background:var(--red-dim);color:var(--red)}
 .sev-pill.warning{background:var(--amber-dim);color:var(--amber)}
 .sev-pill.info{background:var(--blue-dim);color:var(--blue)}
@@ -3157,10 +3157,10 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
 .prio-body{display:none;border-top:1px solid var(--border);padding:12px 16px;background:var(--surface2)}
 .prio-item.open .prio-body{display:block}
 .prio-detail{font-size:12px;color:var(--txt2);margin-bottom:8px;line-height:1.6}
-.prio-reco{font-size:12px;color:var(--txt2);padding:10px 12px;background:var(--surface);border-radius:8px;border-left:3px solid var(--border2);line-height:1.6}
+.prio-reco{font-size:12px;color:var(--txt2);padding:10px 12px;background:var(--surface);border-radius:2px;border-left:3px solid var(--border2);line-height:1.6}
 
 /* ── Findings ── */
-.finding-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden;cursor:pointer;transition:border-color .15s}
+.finding-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;margin-bottom:6px;overflow:hidden;cursor:pointer;}
 .finding-card:hover{border-color:var(--border2)}
 .fc-head{display:flex;align-items:center;gap:10px;padding:12px 14px}
 .sev-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
@@ -3172,22 +3172,22 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
 .fc-body{display:none;border-top:1px solid var(--border);padding:12px 14px;background:var(--surface2)}
 .fc-body.open{display:block}
 .fc-detail{font-size:12px;color:var(--txt2);margin-bottom:6px;line-height:1.5}
-.fc-ref{font-size:11px;color:var(--txt3);font-family:'DM Mono';margin-bottom:8px}
-.fc-reco{font-size:12px;padding:9px 11px;background:var(--surface);border-radius:8px;border-left:3px solid var(--border2);color:var(--txt2);line-height:1.6}
+.fc-ref{font-size:11px;color:var(--txt3);font-family:'JetBrains Mono',monospace;margin-bottom:8px}
+.fc-reco{font-size:12px;padding:8px 10px;background:var(--surface);border-radius:2px;border-left:3px solid var(--border2);color:var(--txt2);line-height:1.6}
 
 /* ── Tooltip ── */
 .has-tooltip{position:relative}
-.tooltip{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:var(--surface3);border:1px solid var(--border2);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--txt);white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s;z-index:500;box-shadow:0 4px 16px rgba(0,0,0,.3);max-width:260px;white-space:normal;text-align:center}
+.tooltip{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:var(--surface3);border:1px solid var(--border2);border-radius:3px;padding:6px 10px;font-size:12px;color:var(--txt);white-space:nowrap;pointer-events:none;opacity:0;z-index:500;box-shadow:0 2px 8px rgba(0,0,0,.3);max-width:240px;white-space:normal;text-align:center}
 .has-tooltip:hover .tooltip{opacity:1}
 
 /* ── Search & filters ── */
 .toolbar{display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap}
 .search-box{position:relative;flex:1;min-width:200px}
-.search-box input{width:100%;padding:9px 14px 9px 36px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--txt);font-size:13px;font-family:'Outfit';outline:none;transition:border-color .15s}
+.search-box input{width:100%;padding:8px 14px 8px 34px;background:var(--surface);border:1px solid var(--border);border-radius:3px;color:var(--txt);font-size:13px;font-family:'Inter',sans-serif;outline:none}
 .search-box input:focus{border-color:var(--blue)}
 .search-box input::placeholder{color:var(--txt3)}
 .search-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--txt3);font-size:14px;pointer-events:none}
-.filter-btn{padding:7px 14px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer;font-size:12px;color:var(--txt2);transition:all .15s;font-family:'Outfit'}
+.filter-btn{padding:5px 12px;border-radius:3px;border:1px solid var(--border);background:none;cursor:pointer;font-size:12px;color:var(--txt2);font-family:'Inter',sans-serif}
 .filter-btn:hover{border-color:var(--border2);color:var(--txt)}
 .filter-btn.on{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:500}
 
@@ -3199,21 +3199,21 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
 .gpo-table tbody tr:hover td{background:var(--surface2)}
 .gpo-table tbody tr:last-child td{border-bottom:none}
 .score-bar-wrap{display:flex;align-items:center;gap:8px}
-.score-bar{width:70px;height:5px;background:var(--surface3);border-radius:3px;overflow:hidden}
-.score-bar-fill{height:100%;border-radius:3px;transition:width .3s}
-.score-num{font-family:'DM Mono';font-size:12px;min-width:28px}
+.score-bar{width:60px;height:3px;background:var(--surface3);overflow:hidden}
+.score-bar-fill{height:100%;transition:width .3s}
+.score-num{font-family:'JetBrains Mono',monospace;font-size:12px;min-width:28px}
 .flag{font-size:10px;padding:1px 7px;border-radius:4px;margin-left:4px;font-weight:500}
 .flag-orphan{background:var(--blue-dim);color:var(--blue)}
 .flag-disabled{background:var(--amber-dim);color:var(--amber)}
 
 /* ── GPO Detail ── */
-.back-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:none;color:var(--txt2);cursor:pointer;font-size:13px;margin-bottom:20px;transition:all .15s;font-family:'Outfit'}
+.back-btn{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border:1px solid var(--border);border-radius:3px;background:none;color:var(--txt2);cursor:pointer;font-size:12px;margin-bottom:16px;font-family:'Inter',sans-serif}
 .back-btn:hover{border-color:var(--border2);color:var(--txt)}
-.gpo-detail-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px 24px;margin-bottom:16px}
+.gpo-detail-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:16px 20px;margin-bottom:12px}
 .gpo-detail-card h3{font-size:16px;font-weight:600;margin-bottom:6px}
-.gpo-meta-grid{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:var(--txt2);font-family:'DM Mono'}
+.gpo-meta-grid{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:var(--txt2);font-family:'JetBrains Mono',monospace}
 .gpo-meta-item span:first-child{color:var(--txt3);margin-right:4px}
-.section-block{background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden}
+.section-block{background:var(--surface);border:1px solid var(--border);border-radius:3px;margin-bottom:6px;overflow:hidden}
 .section-head{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;transition:background .1s}
 .section-head:hover{background:var(--surface2)}
 .section-icon{font-size:15px}
@@ -3233,7 +3233,7 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
 /* ── Type / OU views ── */
 .type-section{margin-bottom:28px}
 .type-header{display:flex;align-items:center;gap:12px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)}
-.ou-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden}
+.ou-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;margin-bottom:6px;overflow:hidden}
 .ou-head{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;transition:background .1s}
 .ou-head:hover{background:var(--surface2)}
 .ou-body{display:none;border-top:1px solid var(--border);padding:8px 14px}
@@ -3243,8 +3243,8 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
 
 /* ── Category grid ── */
 .cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:24px}
-.cat-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;cursor:pointer;transition:border-color .15s,transform .15s}
-.cat-card:hover{border-color:var(--border2);transform:translateY(-2px)}
+.cat-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:14px;cursor:pointer;}
+.cat-card:hover{border-color:var(--border2);background:var(--surface2)}
 .cat-icon{font-size:22px;margin-bottom:8px}
 .cat-name{font-size:13px;font-weight:500;margin-bottom:4px}
 .cat-count{font-size:11px;color:var(--txt2)}
@@ -3252,10 +3252,10 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
 .cat-fill{height:100%;border-radius:2px;background:var(--blue);transition:width .4s}
 
 /* ── Info box ── */
-.info-box{background:var(--blue-dim);border:1px solid var(--blue);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--txt2);margin-bottom:16px;line-height:1.6}
-.warn-box{background:var(--amber-dim);border:1px solid var(--amber);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--txt2);margin-bottom:8px}
+.info-box{background:var(--blue-dim);border:1px solid var(--blue);border-left:3px solid var(--blue);border-radius:2px;padding:10px 14px;font-size:12px;color:var(--txt2);margin-bottom:16px;line-height:1.6}
+.warn-box{background:var(--amber-dim);border:1px solid var(--amber);border-left:3px solid var(--amber);border-radius:2px;padding:10px 14px;font-size:12px;color:var(--txt2);margin-bottom:8px}
 .stitle{font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.6px;margin:18px 0 10px}
-.mono-block{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:'DM Mono';font-size:12px;color:var(--txt2);line-height:2}
+.mono-block{background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:12px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2);line-height:2}
 .mono-comment{color:var(--txt3)}
 
 /* ── Scrollbar ── */
@@ -3263,15 +3263,15 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
 
 /* ── Loading animation ── */
 .loader{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px}
-.loader-ring{width:48px;height:48px;border:3px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite}
+.loader-ring{width:32px;height:32px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite}
 .loader-text{font-size:13px;color:var(--txt2)}
 @keyframes spin{to{transform:rotate(360deg)}}
 .loader.done{animation:fadeOut .4s ease forwards}
 @keyframes fadeOut{to{opacity:0;pointer-events:none}}
 
 /* ── Stagger animation ── */
-.stagger-item{opacity:0;transform:translateY(10px);transition:opacity .3s,transform .3s}
-.stagger-item.visible{opacity:1;transform:translateY(0)}
+.stagger-item{opacity:0;transition:opacity .2s}
+.stagger-item.visible{opacity:1}
 
 /* ── Quick panel ── */
 .qp-finding{border-bottom:1px solid var(--border);padding:14px 18px;transition:background .1s}
@@ -3283,14 +3283,14 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
 .qp-action.modify{background:var(--amber-dim);color:var(--amber)}
 .qp-action.create{background:var(--blue-dim);color:var(--blue)}
 .qp-gpo-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.qp-gpo-chip{font-size:11px;padding:3px 10px;border-radius:20px;background:var(--surface3);color:var(--txt2);cursor:pointer;border:1px solid var(--border);transition:all .15s;font-family:'DM Mono'}
+.qp-gpo-chip{font-size:11px;padding:3px 10px;border-radius:2px;background:var(--surface3);color:var(--txt2);cursor:pointer;border:1px solid var(--border);font-family:'JetBrains Mono',monospace}
 .qp-gpo-chip:hover{border-color:var(--blue);color:var(--blue)}
 .qp-reco{font-size:12px;color:var(--txt2);padding:8px 10px;background:var(--surface2);border-radius:6px;border-left:2px solid var(--border2);line-height:1.6;margin-top:6px;display:none}
 .qp-finding.open .qp-reco{display:block}
 .qp-finding-toggle{font-size:11px;color:var(--txt3);cursor:pointer;transition:transform .15s;display:inline-block}
 .qp-finding.open .qp-finding-toggle{transform:rotate(90deg)}
-.mc.clickable:hover{transform:translateY(-3px);box-shadow:0 4px 20px rgba(0,0,0,.2)}
-.mc.clickable:active{transform:translateY(-1px)}
+.mc.clickable:hover{background:var(--surface2)}
+
 </style>
 </head>
 <body>
@@ -3414,7 +3414,7 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
 
   <!-- Panel rapide findings -->
   <div id="quick-panel" style="display:none;margin-bottom:24px">
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:3px;overflow:hidden">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)">
         <span id="qp-title" style="font-size:14px;font-weight:600"></span>
         <div style="display:flex;gap:8px;align-items:center">
@@ -3470,7 +3470,7 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
       <span style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--txt3);font-size:18px;pointer-events:none">⌕</span>
       <input id="search-main-input" type="text"
         placeholder="Ex: \\\\print01, startup.ps1, minimumpasswordlength, SMB, proxy, 192.168…"
-        style="width:100%;padding:14px 14px 14px 44px;background:var(--surface);border:1px solid var(--border2);border-radius:12px;color:var(--txt);font-size:15px;font-family:'Outfit';outline:none;transition:border-color .15s"
+        style="width:100%;padding:14px 14px 14px 44px;background:var(--surface);border:1px solid var(--border2);border-radius:3px;color:var(--txt);font-size:14px;font-family:'Inter',sans-serif;outline:none;transition:border-color .15s"
         oninput="globalSearch(this.value)"
         onfocus="this.style.borderColor='var(--blue)'"
         onblur="this.style.borderColor='var(--border2)'"
@@ -3696,7 +3696,7 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
         <div style="font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Valeurs en conflit</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
           {% for v in c.conflict_values %}
-          <span style="font-size:12px;padding:4px 10px;border-radius:6px;font-family:'DM Mono';
+          <span style="font-size:12px;padding:4px 10px;border-radius:6px;font-family:'JetBrains Mono',monospace;
                        background:{% if v == c.winner.value %}var(--green-dim){% else %}var(--red-dim){% endif %};
                        color:{% if v == c.winner.value %}var(--green){% else %}var(--red){% endif %};
                        border:1px solid {% if v == c.winner.value %}var(--green){% else %}var(--red){% endif %}">
@@ -3709,10 +3709,10 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
       <!-- GPO gagnante -->
       <div style="margin-bottom:8px">
         <div style="font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">GPO gagnante</div>
-        <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--green-dim);border-radius:8px;border:1px solid var(--green)">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--green-dim);border-radius:2px;border:1px solid var(--green)">
           <span style="color:var(--green)">✔</span>
           <span style="font-size:13px;font-weight:500;cursor:pointer;color:var(--green)" onclick="showGPODetail('{{ c.winner.gpo_guid }}')">{{ c.winner.gpo_name }}</span>
-          <span style="font-size:11px;font-family:'DM Mono';color:var(--txt2);margin-left:4px">= {{ c.winner.value }}</span>
+          <span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--txt2);margin-left:4px">= {{ c.winner.value }}</span>
           {% if c.winner.enforced %}<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:var(--amber-dim);color:var(--amber)">ENFORCED</span>{% endif %}
         </div>
       </div>
@@ -3721,17 +3721,17 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
       <div style="margin-bottom:10px">
         <div style="font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">GPO perdante(s) — valeur écrasée</div>
         {% for loser in c.losers %}
-        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--red-dim);border-radius:8px;border:1px solid var(--red);margin-bottom:4px">
+        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--red-dim);border-radius:2px;border:1px solid var(--red);margin-bottom:4px">
           <span style="color:var(--red)">✘</span>
           <span style="font-size:13px;font-weight:500;cursor:pointer;color:var(--red)" onclick="showGPODetail('{{ loser.gpo_guid }}')">{{ loser.gpo_name }}</span>
-          <span style="font-size:11px;font-family:'DM Mono';color:var(--txt2);margin-left:4px">= {{ loser.value }}</span>
+          <span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--txt2);margin-left:4px">= {{ loser.value }}</span>
           {% if loser.enforced %}<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:var(--amber-dim);color:var(--amber)">ENFORCED</span>{% endif %}
         </div>
         {% endfor %}
       </div>
 
       <!-- Chemin complet -->
-      <div style="font-size:11px;color:var(--txt3);font-family:'DM Mono';padding:6px 0;border-top:1px solid var(--border)">
+      <div style="font-size:11px;color:var(--txt3);font-family:'JetBrains Mono',monospace;padding:6px 0;border-top:1px solid var(--border)">
         {{ c.section_label }} → {{ c.key }}
       </div>
 
@@ -3778,7 +3778,7 @@ body{font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--
   <div class="ou-card">
     <div class="ou-head" onclick="this.nextElementSibling.classList.toggle('open')">
       <span style="color:var(--amber)">⚠</span>
-      <span style="flex:1;font-size:12px;font-family:'DM Mono'">{{ key }}</span>
+      <span style="flex:1;font-size:12px;font-family:'JetBrains Mono',monospace">{{ key }}</span>
       <span style="font-size:11px;color:var(--txt3)">{{ names|length }} GPO ▶</span>
     </div>
     <div class="ou-body" style="font-size:12px;color:var(--txt2)">{{ names|join(', ') }}</div>
@@ -4077,7 +4077,7 @@ function renderGPOList(gpos) {
       </div></td>
       <td>${issHtml}</td>
       <td style="color:var(--txt3)">${g.link_count||0}</td>
-      <td style="font-family:'DM Mono';font-size:11px;color:var(--txt3)">${g.changed?g.changed.slice(0,10):'—'}</td>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--txt3)">${g.changed?g.changed.slice(0,10):'—'}</td>
     </tr>`;
   }).join('') + '</tbody></table>';
 }
@@ -4133,7 +4133,7 @@ function showGPODetail(guid) {
   if (g.links?.length) {
     html += `<div class="stitle">Appliquée sur</div>`;
     g.links.slice(0, 10).forEach(l => {
-      html += `<div style="font-size:12px;color:var(--txt2);font-family:'DM Mono';padding:5px 0;border-bottom:1px solid var(--border)">${l.ou}${l.enforced?'<span style="color:var(--amber);margin-left:8px;font-size:10px">ENFORCED</span>':''}</div>`;
+      html += `<div style="font-size:12px;color:var(--txt2);font-family:'JetBrains Mono',monospace;padding:5px 0;border-bottom:1px solid var(--border)">${l.ou}${l.enforced?'<span style="color:var(--amber);margin-left:8px;font-size:10px">ENFORCED</span>':''}</div>`;
     });
     if (g.links.length > 10) html += `<div style="font-size:11px;color:var(--txt3);padding:4px 0">... et ${g.links.length-10} autres</div>`;
   }
@@ -4198,7 +4198,7 @@ function renderByType() {
           return `<tr onclick="showGPODetail('${g.guid}')">
             <td style="font-weight:500">${g.name}</td>
             <td style="color:var(--txt2);font-size:12px">${preview}${(sec?.params?.length||0)>3?'…':''}</td>
-            <td style="font-family:'DM Mono';font-size:11px;color:var(--txt3)">${g.changed?g.changed.slice(0,10):'—'}</td>
+            <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--txt3)">${g.changed?g.changed.slice(0,10):'—'}</td>
           </tr>`;
         }).join('')}</tbody></table>
       </div>`).join('') || '<div style="color:var(--txt3);padding:20px">Aucun contenu disponible.</div>';
@@ -4218,7 +4218,7 @@ function renderByOU(filter) {
       <div class="ou-card">
         <div class="ou-head" onclick="togOU(this)">
           <span style="color:var(--teal);font-size:12px">⊢</span>
-          <span style="flex:1;font-size:12px;font-family:'DM Mono'">${ou}</span>
+          <span style="flex:1;font-size:12px;font-family:'JetBrains Mono',monospace">${ou}</span>
           <span style="font-size:11px;color:var(--txt3)">${gpos.length} GPO ▶</span>
         </div>
         <div class="ou-body">${gpos.map(g=>`
@@ -4409,7 +4409,7 @@ function globalSearch(q) {
         <td style="padding:6px 10px;border-bottom:1px solid var(--border);width:24px;text-align:center;font-size:14px">${item.type_icon}</td>
         <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);white-space:nowrap;width:170px">${_highlight(item.type, tokens)}</td>
         <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:13px;font-weight:500;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.key, tokens)}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;font-family:'DM Mono';color:var(--txt2);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.value, tokens)}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;font-family:'JetBrains Mono',monospace;color:var(--txt2);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.value, tokens)}</td>
         <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.context, tokens)}</td>
       </tr>`;
     }).join('');
@@ -4437,7 +4437,7 @@ function globalSearch(q) {
       : `<div style="border-top:1px solid var(--border)">${renderRows(group.items)}</div>`;
 
     return `
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:3px;margin-bottom:8px;overflow:hidden">
         <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface2);cursor:pointer"
              onclick="showGPODetail('${group.guid}')">
           <span style="font-size:14px">📄</span>
@@ -4524,7 +4524,7 @@ function openQuickPanel(mode) {
             <div class="sev-dot ${f.severity}" style="margin-top:4px;flex-shrink:0"></div>
             <div style="flex:1">
               <div class="qp-title">${f.title}</div>
-              <div style="font-size:10px;color:var(--txt3);font-family:'DM Mono';margin-top:2px">${f.ref}</div>
+              <div style="font-size:10px;color:var(--txt3);font-family:'JetBrains Mono',monospace;margin-top:2px">${f.ref}</div>
             </div>
             <span class="qp-finding-toggle" onclick="document.getElementById('qpf-${mode}-${i}').classList.toggle('open')">▶</span>
           </div>
@@ -4552,9 +4552,9 @@ function openQuickPanel(mode) {
             <div class="sev-dot" style="background:var(--green);margin-top:4px;flex-shrink:0"></div>
             <div style="flex:1">
               <div class="qp-title">${r.title}</div>
-              <div style="font-size:10px;color:var(--txt3);font-family:'DM Mono';margin-top:2px">${r.ref} · ${r.category}</div>
+              <div style="font-size:10px;color:var(--txt3);font-family:'JetBrains Mono',monospace;margin-top:2px">${r.ref} · ${r.category}</div>
             </div>
-            <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:var(--green-dim);color:var(--green)">✓ OK</span>
+            <span style="font-size:11px;padding:2px 8px;border-radius:2px;background:var(--green-dim);color:var(--green)">✓ OK</span>
           </div>
         </div>`).join('');
     }
@@ -4597,7 +4597,7 @@ function openQuickPanel(mode) {
           <div class="qp-finding-head" onclick="document.getElementById('qpd-${i}').classList.toggle('open')" style="cursor:pointer">
             <div style="width:28px;height:28px;border-radius:50%;background:var(--amber-dim);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--amber);flex-shrink:0">${d.gpos.length}</div>
             <div style="flex:1;min-width:0">
-              <div style="font-size:12px;font-weight:500;font-family:'DM Mono';overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.key}</div>
+              <div style="font-size:12px;font-weight:500;font-family:'JetBrains Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.key}</div>
               <div style="font-size:11px;color:var(--txt3);margin-top:1px">valeur : ${d.value} · ${d.section}</div>
             </div>
             <span class="qp-finding-toggle">▶</span>
@@ -4619,7 +4619,7 @@ function openQuickPanel(mode) {
       const sc = s>=70?'var(--green)':s>=40?'var(--amber)':'var(--red)';
       const issues = g.findings?.length || 0;
       return `<div class="qp-finding" style="display:flex;align-items:center;gap:12px;cursor:pointer" onclick="showGPODetail('${g.guid}')">
-        <span style="font-size:12px;color:${sc};font-family:'DM Mono';min-width:28px">${s}</span>
+        <span style="font-size:12px;color:${sc};font-family:'JetBrains Mono',monospace;min-width:28px">${s}</span>
         <span style="flex:1;font-size:13px;font-weight:500">${g.name}</span>
         ${issues ? `<span style="font-size:11px;color:var(--amber)">${issues} pb</span>` : ''}
         ${g.is_orphan ? '<span class="flag flag-orphan">orpheline</span>' : ''}
