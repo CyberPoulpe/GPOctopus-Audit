@@ -239,7 +239,7 @@ AUDIT_RULES = [
         "severity": "warning",
         "ref": "CIS 17.5.1 · ANSSI R-09",
         "category": "Audit",
-        "check_key": "auditlogonevents",        # tout en minuscules comme parse_gpttmpl() retourne
+        "check_key": "auditlogonEvents",       # nom exact dans GptTmpl.inf
         "section": "event_audit",
         "threshold": 0,
         "operator": "eq",
@@ -408,43 +408,6 @@ AUDIT_RULES = [
         "reg_expected": 1,
         "remediation": "Activer via GPO Device Guard. Requis : UEFI, Secure Boot, TPM 2.0, Win10/11 64-bit.",
     },
-    # ── Kerberos ──
-    {
-        "id": "KRB-001",
-        "title": "Durée de vie des tickets Kerberos trop longue (> 10h)",
-        "severity": "warning",
-        "ref": "CIS 2.3.9.1 · ANSSI R-06",
-        "category": "Kerberos",
-        "check_key": "maxtickerage",
-        "section": "kerberos_policy",
-        "threshold": 10,
-        "operator": "gt",
-        "remediation": "MaxTicketAge ≤ 10h. Un ticket long-lived donne plus de temps à un attaquant pour l'exploiter (Pass-the-Ticket).",
-    },
-    {
-        "id": "KRB-002",
-        "title": "Tolérance d'horloge Kerberos trop élevée (> 5 min)",
-        "severity": "warning",
-        "ref": "CIS 2.3.9.3 · ANSSI R-06",
-        "category": "Kerberos",
-        "check_key": "maxclockskew",
-        "section": "kerberos_policy",
-        "threshold": 5,
-        "operator": "gt",
-        "remediation": "MaxClockSkew ≤ 5 minutes. Une tolérance excessive facilite les attaques par replay de tickets.",
-    },
-    {
-        "id": "KRB-003",
-        "title": "Renouvellement des tickets Kerberos trop long (> 7 jours)",
-        "severity": "info",
-        "ref": "CIS 2.3.9.2 · ANSSI R-06",
-        "category": "Kerberos",
-        "check_key": "maxrenewage",
-        "section": "kerberos_policy",
-        "threshold": 7,
-        "operator": "gt",
-        "remediation": "MaxRenewAge ≤ 7 jours. Limite la durée pendant laquelle un ticket volé peut être renouvelé.",
-    },
 ]
 
 # ─── Règles sur les [Registry Values] du GptTmpl.inf ────────────────────────
@@ -549,14 +512,13 @@ AUDIT_RULES_REGVAL = [
     # ── LSASS protection ──
     {
         "id": "LSA-001",
-        "title": "Protection LSASS (RunAsPPL) non activée ou insuffisante",
+        "title": "Protection LSASS (RunAsPPL) non activée",
         "severity": "warning",
         "ref": "MS KB3033929 · ANSSI R-08",
         "category": "Services & Composants système",
         "regval_key": "machine\\system\\currentcontrolset\\control\\lsa\\runasppl",
-        "bad_val": "4,1",
-        "operator": "ne",
-        "remediation": "RunAsPPL = 1 (REG_DWORD). Protège lsass.exe comme processus protégé — Mimikatz ne peut plus lire les credentials en mémoire même avec les droits admin locaux. Requis : Secure Boot activé.",
+        "bad_val": "4,0",
+        "remediation": "RunAsPPL = 1. Protège lsass.exe comme processus protégé — Mimikatz ne peut plus lire les credentials en mémoire même avec les droits admin locaux. Requis : Secure Boot activé.",
     },
 
     # ── Mots de passe complémentaires ──
@@ -1426,7 +1388,7 @@ def detect_gpo_conflicts(gpos: list) -> list:
         })
 
     for gpo in gpos:
-        if is_gpo_fully_disabled(gpo):   # GPO entièrement désactivée
+        if gpo.get('flags') == '3':   # GPO entièrement désactivée
             continue
 
         # ── GptTmpl.inf (settings) ──
@@ -1531,18 +1493,6 @@ def detect_gpo_conflicts(gpos: list) -> list:
     # Trier : sécurité d'abord, puis nombre de GPO en conflit
     conflicts.sort(key=lambda c: (0 if c['is_security'] else 1, -c['gpo_count']))
     return conflicts[:100]   # cap à 100 pour ne pas exploser le JSON
-
-
-def _enrich_gpos_for_search(gpos: list, gpo_reports: list) -> list:
-    """Injecte les findings calculés dans chaque GPO pour qu'ils soient indexés dans la recherche."""
-    report_by_guid = {r['guid']: r for r in gpo_reports}
-    for gpo in gpos:
-        report = report_by_guid.get(gpo['guid'], {})
-        gpo['_findings_preview'] = [
-            {'title': f['title'], 'severity': f['severity'], 'category': f.get('category', '')}
-            for f in report.get('findings', [])
-        ]
-    return gpos
 
 
 def build_search_index(gpos: list) -> list:
@@ -1774,36 +1724,8 @@ def build_search_index(gpos: list) -> list:
                  f"{'ENFORCED' if link.get('enforced') else 'Normal'}"
                  f"{' | Lien désactivé' if link.get('disabled') else ''}")
 
-        # ── Findings de sécurité (pour pouvoir chercher "WDigest", "NTLMv1"…) ──
-        for f in gpo.get('_findings_preview', []):
-            _add(gpo, 'Constatation sécurité', '🔒',
-                 f.get('title', ''),
-                 f.get('severity', ''),
-                 f.get('category', ''))
-
     return index
 
-
-def _gpo_flags(gpo: dict) -> int:
-    """Retourne les flags d'une GPO comme entier. 0=actif, 1=computer disabled, 2=user disabled, 3=tout désactivé."""
-    try:
-        return int(gpo.get('flags', 0))
-    except (ValueError, TypeError):
-        return 0
-
-def is_gpo_fully_disabled(gpo: dict) -> bool:
-    """Retourne True si la GPO est entièrement désactivée (flags=3)."""
-    return _gpo_flags(gpo) == 3
-
-def is_gpo_computer_disabled(gpo: dict) -> bool:
-    """Retourne True si la partie Computer de la GPO est désactivée (flags=1 ou flags=3)."""
-    f = _gpo_flags(gpo)
-    return f in (1, 3)
-
-def is_gpo_user_disabled(gpo: dict) -> bool:
-    """Retourne True si la partie User de la GPO est désactivée (flags=2 ou flags=3)."""
-    f = _gpo_flags(gpo)
-    return f in (2, 3)
 
 def build_rsop(gpos: list) -> tuple[dict, list]:
     """
@@ -1816,38 +1738,23 @@ def build_rsop(gpos: list) -> tuple[dict, list]:
     rsop_registry_xml = {}   # Registry.xml : (hive\key_lower, name_lower) -> int/str
 
     for gpo in gpos:
-        # Ignorer les GPO entièrement désactivées
-        if is_gpo_fully_disabled(gpo):
+        # Ignorer les GPO désactivées ou orphelines
+        if gpo.get('flags') == '3':  # All settings disabled
             continue
 
-        # Ignorer les paramètres Computer si Computer disabled
-        skip_computer = is_gpo_computer_disabled(gpo)
-        # Ignorer les paramètres User si User disabled
-        skip_user = is_gpo_user_disabled(gpo)
-
         # Fusionner les settings (dernier gagne = priorité la plus haute)
-        # GptTmpl.inf = paramètres Computer — ignorer si computer disabled
-        if not skip_computer:
-            for section, params in gpo.get('settings', {}).items():
-                if section not in rsop_settings:
-                    rsop_settings[section] = {}
-                for k, v in params.items():
-                    rsop_settings[section][k] = v
+        for section, params in gpo.get('settings', {}).items():
+            if section not in rsop_settings:
+                rsop_settings[section] = {}
+            for k, v in params.items():
+                rsop_settings[section][k] = v
 
-        # Registry.pol Machine — Computer
-        if not skip_computer:
-            for (key, vname, rtype, val) in gpo.get('registry_entries', []):
-                rsop_registry[(key, vname)] = val
-
-        # Registry.pol User
-        if not skip_user:
-            for (key, vname, rtype, val) in gpo.get('registry_entries_user', []):
-                rsop_registry[(key, vname)] = val
+        # Fusionner les entrées registre (Registry.pol binaire)
+        for (key, vname, rtype, val) in gpo.get('registry_entries', []):
+            rsop_registry[(key, vname)] = val
 
         # Fusionner les préférences registre XML (Registry.xml)
-        for scope, skip in [('registry_xml_machine', skip_computer), ('registry_xml_user', skip_user)]:
-            if skip:
-                continue
+        for scope in ('registry_xml_machine', 'registry_xml_user'):
             for entry in gpo.get(scope, []):
                 # Normaliser la clé : HKEY_LOCAL_MACHINE\key\name
                 hive = entry.get('hive', '').upper().replace('HKEY_LOCAL_MACHINE', 'HKLM').replace('HKEY_CURRENT_USER', 'HKCU')
@@ -2399,11 +2306,7 @@ class GPOCollector:
             return []
         try:
             files = self._smb.listPath(self._sysvol_share, rel_path + '\\*')
-            return [
-                f for f in files
-                if f.get_longname() not in ('..', '.', '')
-                and not f.is_directory()
-            ]
+            return [f for f in files if f.get_longname() not in ('..', '.', '')]
         except Exception:
             return []
 
@@ -2944,7 +2847,7 @@ def analyze_gpos(gpos: list) -> dict:
 
         # Chercher dans les settings des GPO
         for gpo in gpos:
-            if is_gpo_fully_disabled(gpo):
+            if gpo.get('flags') == '3':
                 continue
             gpo_has_param = False
             # Vérifier dans registry_values (GptTmpl.inf)
@@ -2992,53 +2895,34 @@ def analyze_gpos(gpos: list) -> dict:
     for gpo in gpos:
         if not gpo['links']:
             orphan_gpos.append(gpo['name'])
-
-        fully_disabled = is_gpo_fully_disabled(gpo)
-        computer_disabled = is_gpo_computer_disabled(gpo)
-
         per_gpo_findings = []
-        if not fully_disabled:
-            for rule in AUDIT_RULES:
-                # Ne pas évaluer les règles Computer si la partie Computer est désactivée
-                if computer_disabled and rule.get('section') not in ('registry_xml_user',):
-                    pass  # on laisse passer — GptTmpl = computer, mais si fully_disabled on skipait déjà
-                f = evaluate_rule_on_gpo(rule, gpo.get('settings', {}), gpo.get('registry_entries', []))
-                if f:
-                    per_gpo_findings.append(f)
+        for rule in AUDIT_RULES:
+            f = evaluate_rule_on_gpo(rule, gpo.get('settings', {}), gpo.get('registry_entries', []))
+            if f:
+                per_gpo_findings.append(f)
 
-        score = None if fully_disabled else 100
-        if score is not None:
-            for f in per_gpo_findings:
-                score -= {'critical': 25, 'warning': 10, 'info': 3}.get(f['severity'], 0)
-            score = max(0, score)
+        score = 100
+        for f in per_gpo_findings:
+            score -= {'critical': 25, 'warning': 10, 'info': 3}.get(f['severity'], 0)
+        score = max(0, score)
 
         # Préparer le contenu lisible de la GPO
         content_sections = _format_gpo_content(gpo)
         has_content = any(s['params'] for s in content_sections)
 
-        flags_int = _gpo_flags(gpo)
-        disabled_label = ''
-        if flags_int == 3:
-            disabled_label = 'Entièrement désactivée'
-        elif flags_int == 1:
-            disabled_label = 'Paramètres ordinateur désactivés'
-        elif flags_int == 2:
-            disabled_label = 'Paramètres utilisateur désactivés'
-
         gpo_reports.append({
-            'name':             gpo['name'],
-            'guid':             gpo['guid'],
-            'links':            gpo['links'],
-            'link_count':       len(gpo['links']),
-            'flags':            str(flags_int),
-            'disabled_label':   disabled_label,
-            'is_disabled':      fully_disabled,
-            'created':          gpo.get('created', ''),
-            'changed':          gpo.get('changed', ''),
-            'findings':         per_gpo_findings,
-            'score':            score,
-            'is_orphan':        not gpo['links'],
-            'has_content':      has_content,
+            'name':       gpo['name'],
+            'guid':       gpo['guid'],
+            'links':      gpo['links'],
+            'link_count': len(gpo['links']),
+            'flags':      gpo.get('flags', '0'),
+            'created':    gpo.get('created', ''),
+            'changed':    gpo.get('changed', ''),
+            'findings':   per_gpo_findings,
+            'score':      score,
+            'is_orphan':  not gpo['links'],
+            'has_content': has_content,
+            # content est exclu ici — chargé à la demande via gpo_content_index
         })
         # Index de contenu séparé — chargé uniquement quand on ouvre une GPO
         gpo_content_index[gpo['guid']] = content_sections
@@ -3072,7 +2956,7 @@ def analyze_gpos(gpos: list) -> dict:
     )
     param_index = {}  # (section, key, value) -> [gpo_names]
     for gpo in gpos:
-        if is_gpo_fully_disabled(gpo):
+        if gpo.get('flags') == '3':
             continue
         # Settings GptTmpl.inf
         for section, params in gpo.get('settings', {}).items():
@@ -3152,12 +3036,12 @@ def analyze_gpos(gpos: list) -> dict:
         'gpo_conflicts': gpo_conflicts,
         'conflicts_high':    conflicts_high,
         'conflicts_low':     conflicts_low,
-        'gpo_reports':       sorted(gpo_reports, key=lambda g: (g['score'] if g['score'] is not None else 101)),
+        'gpo_reports':       sorted(gpo_reports, key=lambda g: g['score']),
         'gpo_content_index': gpo_content_index,
         'all_findings':      global_findings,
         'generated_at':      datetime.now().strftime('%d/%m/%Y %H:%M'),
         'gpo_count':         len(gpos),
-        'search_index':      build_search_index(_enrich_gpos_for_search(gpos, gpo_reports)),
+        'search_index':      build_search_index(gpos),
     }
 
 
@@ -3168,1988 +3052,1939 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GPOctopus Audit — {{ data.generated_at }}</title>
+<title>GPOctopus — {{ data.generated_at }}</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap');
 
+/* ── Variables thème ─────────────────────────────── */
 [data-theme="dark"]{
-  --bg:#0f1117;--surface:#161b27;--surface2:#1c2133;--surface3:#222840;
+  --bg:#0d1117;--surface:#161b27;--surface2:#1c2133;--surface3:#222840;
   --border:#252d42;--border2:#2e3852;
-  --txt:#c8cfe0;--txt2:#6b7899;--txt3:#3d4a68;
-  --red:#e05252;--red-dim:rgba(224,82,82,.1);--red-glow:rgba(224,82,82,.2);
-  --amber:#d4892a;--amber-dim:rgba(212,137,42,.1);
-  --green:#3a9e72;--green-dim:rgba(58,158,114,.1);
-  --blue:#4a7fd4;--blue-dim:rgba(74,127,212,.1);
-  --purple:#8b6ddb;--teal:#2ab5a0;
-  --chart1:#4a7fd4;--chart2:#e05252;--chart3:#d4892a;--chart4:#3a9e72;--chart5:#8b6ddb;
+  --txt:#c8cfe0;--txt2:#7a84a8;--txt3:#3d4a68;
+  --red:#e05252;--red-bg:rgba(224,82,82,.1);
+  --amber:#d4892a;--amber-bg:rgba(212,137,42,.1);
+  --green:#3a9e72;--green-bg:rgba(58,158,114,.1);
+  --blue:#4a7fd4;--blue-bg:rgba(74,127,212,.1);
+  --teal:#2ab5a0;--teal-bg:rgba(42,181,160,.1);
+  --purple:#8b6ddb;
 }
 [data-theme="light"]{
-  --bg:#f2f4f8;--surface:#ffffff;--surface2:#eef0f6;--surface3:#e5e8f0;
-  --border:#d8dce8;--border2:#c4c9d8;
+  --bg:#f0f2f7;--surface:#ffffff;--surface2:#eef0f6;--surface3:#e5e8f0;
+  --border:#d5dae8;--border2:#c4c9d8;
   --txt:#1e2336;--txt2:#4e5878;--txt3:#8890aa;
-  --red:#c03030;--red-dim:rgba(192,48,48,.07);--red-glow:rgba(192,48,48,.15);
-  --amber:#a86a10;--amber-dim:rgba(168,106,16,.07);
-  --green:#1e7a54;--green-dim:rgba(30,122,84,.07);
-  --blue:#2655b0;--blue-dim:rgba(38,85,176,.07);
-  --purple:#5c3fc0;--teal:#1a8a78;
-  --chart1:#2655b0;--chart2:#c03030;--chart3:#a86a10;--chart4:#1e7a54;--chart5:#5c3fc0;
+  --red:#c03030;--red-bg:rgba(192,48,48,.08);
+  --amber:#a86a10;--amber-bg:rgba(168,106,16,.08);
+  --green:#1e7a54;--green-bg:rgba(30,122,84,.08);
+  --blue:#2655b0;--blue-bg:rgba(38,85,176,.08);
+  --teal:#1a8a78;--teal-bg:rgba(26,138,120,.08);
+  --purple:#5c3fc0;
 }
 
 *{box-sizing:border-box;margin:0;padding:0}
 html{font-size:14px}
-body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;overflow-x:hidden}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh}
 
-/* ── Sidebar ── */
-.sidebar{position:fixed;top:0;left:0;width:230px;height:100vh;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:200;overflow-y:auto}
-.sb-logo{padding:22px 20px 16px;border-bottom:1px solid var(--border)}
-.sb-logo h1{font-size:16px;font-weight:700;letter-spacing:-.4px;display:flex;align-items:center;gap:8px}
-.sb-logo p{font-size:11px;color:var(--txt3);margin-top:3px}
-.sb-score{margin:14px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:12px;display:flex;align-items:center;gap:12px;border-left:2px solid var(--border2)}
-.sb-score-ring{position:relative;width:56px;height:56px;flex-shrink:0}
-.sb-score-ring svg{transform:rotate(-90deg)}
-.sb-score-val{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
-.sb-score-val .n{font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace;line-height:1}
-.sb-score-val .l{font-size:9px;color:var(--txt3)}
-.sb-score-info{flex:1;min-width:0}
-.sb-score-info .label{font-size:11px;font-weight:600}
-.sb-score-info .sub{font-size:11px;color:var(--txt2);margin-top:2px}
-.nav-group{padding:12px 0 4px}
-.nav-label{font-size:10px;font-weight:600;color:var(--txt3);letter-spacing:.8px;text-transform:uppercase;padding:0 20px 6px}
-.nav-item{display:flex;align-items:center;gap:10px;padding:8px 20px;font-size:13px;color:var(--txt2);cursor:pointer;border-left:2px solid transparent;transition:all .15s}
-.nav-item:hover{color:var(--txt);background:var(--surface2)}
-.nav-item.active{color:var(--txt);border-left-color:var(--blue);background:var(--surface2);font-weight:500}
-.nav-icon{font-size:15px;width:18px;text-align:center;flex-shrink:0}
-.nav-badge{margin-left:auto;font-size:10px;padding:0 5px;border-radius:2px;background:var(--red-dim);color:var(--red);font-weight:600;font-family:'JetBrains Mono',monospace}
-.sb-footer{margin-top:auto;padding:14px 20px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
-.theme-toggle{width:34px;height:18px;background:var(--surface3);border-radius:9px;cursor:pointer;position:relative;border:1px solid var(--border2)}
-.theme-toggle::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--txt2);transition:left .2s}
-[data-theme="light"] .theme-toggle::after{left:18px;background:var(--blue)}
+/* ── Layout ────────────────────────────────────────── */
+.app{display:flex;height:100vh;overflow:hidden}
 
-/* ── Main ── */
-.main{margin-left:230px;padding:32px 36px;max-width:1160px}
-.view{display:none;animation:fadeIn .25s ease}
-.view.active{display:block}
-@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-.view-header{margin-bottom:28px}
-.view-title{font-size:22px;font-weight:700;letter-spacing:-.4px}
-.view-sub{font-size:13px;color:var(--txt2);margin-top:4px}
+/* ── Sidebar ───────────────────────────────────────── */
+.sidebar{
+  width:220px;flex-shrink:0;
+  background:var(--surface);
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;
+  overflow-y:auto;
+}
+.sb-logo{padding:18px 16px 14px;border-bottom:1px solid var(--border)}
+.sb-logo h1{font-size:15px;font-weight:700;display:flex;align-items:center;gap:7px}
+.sb-logo p{font-size:10px;color:var(--txt3);margin-top:3px}
 
-/* ── Metric cards ── */
-.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:28px}
-.mc{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:14px 16px;position:relative;cursor:default;}
-.mc:hover{background:var(--surface2)}
+/* Score ring */
+.sb-score{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+.score-ring{position:relative;width:52px;height:52px;flex-shrink:0}
+.score-ring svg{transform:rotate(-90deg)}
+.score-val{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1}
+.score-val .n{font-size:17px;font-weight:700;font-family:'JetBrains Mono',monospace}
+.score-val .l{font-size:9px;color:var(--txt3)}
+.score-info .label{font-size:11px;font-weight:600}
+.score-info .sub{font-size:10px;color:var(--txt2);margin-top:2px;line-height:1.4}
 
+/* Onglets principaux */
+.main-tabs{display:flex;flex-direction:column;gap:2px;padding:12px 10px}
+.main-tab{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 12px;border-radius:6px;
+  cursor:pointer;transition:background .12s;
+  font-size:13px;color:var(--txt2);font-weight:500;
+}
+.main-tab:hover{background:var(--surface2);color:var(--txt)}
+.main-tab.active{background:var(--blue-bg);color:var(--blue);border:1px solid rgba(74,127,212,.2)}
+.main-tab .tab-icon{font-size:16px;width:20px;text-align:center;flex-shrink:0}
+.main-tab .tab-badge{
+  margin-left:auto;font-size:10px;font-weight:700;
+  padding:1px 6px;border-radius:10px;
+  background:var(--red-bg);color:var(--red);
+  font-family:'JetBrains Mono',monospace;
+}
+.main-tab.active .tab-badge{background:rgba(74,127,212,.2);color:var(--blue)}
 
+.sb-divider{height:1px;background:var(--border);margin:4px 10px}
 
+/* Sous-navigation contextuelle */
+.sub-nav{padding:6px 10px 10px}
+.sub-nav-label{font-size:10px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.06em;padding:6px 8px 4px}
+.sub-item{
+  display:flex;align-items:center;gap:8px;
+  padding:6px 10px;border-radius:4px;
+  cursor:pointer;font-size:12px;color:var(--txt2);
+  transition:all .1s;
+}
+.sub-item:hover{background:var(--surface2);color:var(--txt)}
+.sub-item.active{color:var(--txt);font-weight:500}
+.sub-item .si-icon{width:16px;text-align:center;font-size:12px;flex-shrink:0}
+.sub-item .si-count{margin-left:auto;font-size:10px;color:var(--txt3)}
 
+.sb-footer{margin-top:auto;padding:12px 16px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.theme-btn{width:30px;height:16px;background:var(--surface3);border-radius:8px;cursor:pointer;position:relative;border:1px solid var(--border2);flex-shrink:0}
+.theme-btn::after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:var(--txt3);transition:left .15s}
+[data-theme="light"] .theme-btn::after{left:16px;background:var(--blue)}
 
-.mc .v{font-size:26px;font-weight:600;font-family:'JetBrains Mono',monospace;line-height:1;margin-bottom:4px}
-.mc .l{font-size:11px;color:var(--txt3);letter-spacing:.2px}
-.mc.red .v{color:var(--red)}.mc.amber .v{color:var(--amber)}.mc.green .v{color:var(--green)}.mc.blue .v{color:var(--blue)}
+/* ── Main content ──────────────────────────────────── */
+.main{flex:1;overflow-y:auto;padding:0}
 
-/* ── Charts ── */
-.charts-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
-.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:16px}
-.chart-title{font-size:13px;font-weight:600;margin-bottom:16px;color:var(--txt)}
-.chart-wrap{position:relative}
+.tab-content{display:none;animation:fadeIn .2s ease}
+.tab-content.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
 
-/* ── Priority list ── */
-.prio-item{background:var(--surface);border:1px solid var(--border);border-radius:3px;margin-bottom:6px;overflow:hidden;cursor:pointer;}
-.prio-item:hover{border-color:var(--border2);background:var(--surface2)}
-.prio-item.open{border-color:var(--border2)}
-.prio-head{display:flex;align-items:center;gap:12px;padding:13px 16px}
-.prio-num{width:24px;height:24px;border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;flex-shrink:0}
-.prio-num.critical{background:var(--red-dim);color:var(--red)}
-.prio-num.warning{background:var(--amber-dim);color:var(--amber)}
-.prio-title{flex:1;font-size:13px;font-weight:500}
-.prio-ref{font-size:10px;color:var(--txt3);font-family:'JetBrains Mono',monospace;margin-top:2px}
-.sev-pill{font-size:10px;padding:1px 7px;border-radius:2px;font-weight:600;flex-shrink:0;font-family:'JetBrains Mono',monospace;letter-spacing:.3px}
-.sev-pill.critical{background:var(--red-dim);color:var(--red)}
-.sev-pill.warning{background:var(--amber-dim);color:var(--amber)}
-.sev-pill.info{background:var(--blue-dim);color:var(--blue)}
-.prio-arr{font-size:10px;color:var(--txt3);transition:transform .17s;flex-shrink:0}
-.prio-item.open .prio-arr{transform:rotate(90deg)}
-.prio-body{display:none;border-top:1px solid var(--border);padding:12px 16px;background:var(--surface2)}
-.prio-item.open .prio-body{display:block}
-.prio-detail{font-size:12px;color:var(--txt2);margin-bottom:8px;line-height:1.6}
-.prio-reco{font-size:12px;color:var(--txt2);padding:10px 12px;background:var(--surface);border-radius:2px;border-left:3px solid var(--border2);line-height:1.6}
+.page-header{
+  padding:24px 32px 20px;
+  border-bottom:1px solid var(--border);
+  background:var(--surface);
+  position:sticky;top:0;z-index:50;
+}
+.page-header h2{font-size:20px;font-weight:700;letter-spacing:-.3px}
+.page-header p{font-size:12px;color:var(--txt2);margin-top:3px}
 
-/* ── Findings ── */
-.finding-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;margin-bottom:6px;overflow:hidden;cursor:pointer;}
+.content-area{padding:24px 32px}
+
+/* ── Loader ─────────────────────────────────────────── */
+.loader{
+  position:fixed;inset:0;z-index:9999;
+  background:var(--bg);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+  transition:opacity .3s;
+}
+.loader.done{opacity:0;pointer-events:none}
+.loader-ring{width:36px;height:36px;border:3px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loader-text{font-size:13px;color:var(--txt2)}
+
+/* ── Cartes métriques ───────────────────────────────── */
+.metrics-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:24px}
+.metric-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  padding:16px;cursor:pointer;transition:border-color .15s,background .15s;
+}
+.metric-card:hover{border-color:var(--border2);background:var(--surface2)}
+.metric-card.red{border-left:3px solid var(--red)}
+.metric-card.amber{border-left:3px solid var(--amber)}
+.metric-card.green{border-left:3px solid var(--green)}
+.metric-card.blue{border-left:3px solid var(--blue)}
+.metric-card .mv{font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace;line-height:1}
+.metric-card .ml{font-size:11px;color:var(--txt2);margin-top:4px}
+.metric-card.red .mv{color:var(--red)}
+.metric-card.amber .mv{color:var(--amber)}
+.metric-card.green .mv{color:var(--green)}
+.metric-card.blue .mv{color:var(--blue)}
+
+/* ── Section titres ────────────────────────────────── */
+.section-title{
+  font-size:13px;font-weight:600;
+  color:var(--txt2);text-transform:uppercase;letter-spacing:.06em;
+  margin-bottom:12px;padding-bottom:8px;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:8px;
+}
+.section-title .st-count{
+  margin-left:auto;font-size:11px;font-weight:400;
+  color:var(--txt3);text-transform:none;letter-spacing:0;
+}
+
+/* ── Finding cards ─────────────────────────────────── */
+.finding-list{display:flex;flex-direction:column;gap:6px;margin-bottom:24px}
+
+.finding-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  overflow:hidden;transition:border-color .15s;
+}
 .finding-card:hover{border-color:var(--border2)}
-.fc-head{display:flex;align-items:center;gap:10px;padding:12px 14px}
-.sev-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.sev-dot.critical{background:var(--red)}.sev-dot.warning{background:var(--amber)}.sev-dot.info{background:var(--blue)}
-.fc-title{flex:1;font-size:13px;font-weight:500}
-.nc-tag{font-size:10px;padding:1px 6px;border-radius:4px;background:var(--amber-dim);color:var(--amber);margin-left:6px;vertical-align:middle}
-.fc-arr{font-size:10px;color:var(--txt3);transition:transform .15s}
-.fc-arr.open{transform:rotate(90deg)}
-.fc-body{display:none;border-top:1px solid var(--border);padding:12px 14px;background:var(--surface2)}
+.finding-card.critical{border-left:3px solid var(--red)}
+.finding-card.warning{border-left:3px solid var(--amber)}
+.finding-card.info{border-left:3px solid var(--blue)}
+.finding-card.good{border-left:3px solid var(--green)}
+
+.fc-head{
+  display:flex;align-items:center;gap:12px;
+  padding:12px 16px;cursor:pointer;
+}
+.fc-sev{
+  width:7px;height:7px;border-radius:50%;flex-shrink:0;
+}
+.fc-sev.critical{background:var(--red)}
+.fc-sev.warning{background:var(--amber)}
+.fc-sev.info{background:var(--blue)}
+.fc-sev.good{background:var(--green)}
+
+.fc-main{flex:1;min-width:0}
+.fc-title{font-size:13px;font-weight:500;line-height:1.3}
+.fc-meta{font-size:11px;color:var(--txt3);margin-top:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.fc-pill{
+  font-size:10px;padding:1px 7px;border-radius:10px;font-weight:600;
+}
+.fc-pill.critical{background:var(--red-bg);color:var(--red)}
+.fc-pill.warning{background:var(--amber-bg);color:var(--amber)}
+.fc-pill.info{background:var(--blue-bg);color:var(--blue)}
+.fc-pill.good{background:var(--green-bg);color:var(--green)}
+
+.fc-arrow{font-size:11px;color:var(--txt3);transition:transform .15s;flex-shrink:0}
+.fc-arrow.open{transform:rotate(90deg)}
+
+.fc-body{
+  display:none;padding:0 16px 14px 35px;
+  border-top:1px solid var(--border);
+}
 .fc-body.open{display:block}
-.fc-detail{font-size:12px;color:var(--txt2);margin-bottom:6px;line-height:1.5}
-.fc-ref{font-size:11px;color:var(--txt3);font-family:'JetBrains Mono',monospace;margin-bottom:8px}
-.fc-reco{font-size:12px;padding:8px 10px;background:var(--surface);border-radius:2px;border-left:3px solid var(--border2);color:var(--txt2);line-height:1.6}
+.fc-detail{font-size:12px;color:var(--txt2);padding:10px 0 6px;line-height:1.6}
+.fc-ref{font-size:11px;color:var(--txt3);margin-bottom:6px}
+.fc-reco{
+  font-size:12px;color:var(--green);
+  padding:8px 12px;background:var(--green-bg);border-radius:4px;
+  line-height:1.5;
+}
+.fc-sources{margin-top:8px;font-size:11px;color:var(--txt3);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.fc-gpo-link{
+  font-size:11px;color:var(--blue);cursor:pointer;
+  padding:1px 6px;background:var(--blue-bg);border-radius:3px;
+  font-family:'JetBrains Mono',monospace;
+}
+.fc-gpo-link:hover{text-decoration:underline}
 
-/* ── Tooltip ── */
-.has-tooltip{position:relative}
-.tooltip{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:var(--surface3);border:1px solid var(--border2);border-radius:3px;padding:6px 10px;font-size:12px;color:var(--txt);white-space:nowrap;pointer-events:none;opacity:0;z-index:500;box-shadow:0 2px 8px rgba(0,0,0,.3);max-width:240px;white-space:normal;text-align:center}
-.has-tooltip:hover .tooltip{opacity:1}
+/* Bouton expliquer */
+.btn-explain{
+  font-size:10px;padding:2px 8px;
+  border:1px solid var(--teal);color:var(--teal);
+  background:none;border-radius:4px;cursor:pointer;
+  flex-shrink:0;
+}
+.btn-explain:hover{background:var(--teal-bg)}
 
-/* ── Search & filters ── */
-.toolbar{display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap}
-.search-box{position:relative;flex:1;min-width:200px}
-.search-box input{width:100%;padding:8px 14px 8px 34px;background:var(--surface);border:1px solid var(--border);border-radius:3px;color:var(--txt);font-size:13px;font-family:'Inter',sans-serif;outline:none}
-.search-box input:focus{border-color:var(--blue)}
-.search-box input::placeholder{color:var(--txt3)}
-.search-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--txt3);font-size:14px;pointer-events:none}
-.filter-btn{padding:5px 12px;border-radius:3px;border:1px solid var(--border);background:none;cursor:pointer;font-size:12px;color:var(--txt2);font-family:'Inter',sans-serif}
+/* Zone explication inline */
+.explain-zone{
+  margin-top:10px;padding:12px;
+  background:var(--surface2);
+  border-left:3px solid var(--teal);border-radius:0 6px 6px 0;
+  display:none;
+}
+.explain-zone.open{display:block}
+.explain-attack{font-size:12px;color:var(--txt2);margin-bottom:8px;line-height:1.5}
+.explain-chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.explain-chip{font-size:10px;padding:2px 8px;border-radius:3px;font-weight:500}
+.explain-chip.tool{background:rgba(224,82,82,.12);color:var(--red)}
+.explain-chip.impact{background:rgba(212,137,42,.12);color:var(--amber)}
+
+/* Filtre non-configuré */
+.nc-tag{
+  font-size:10px;padding:1px 6px;border-radius:10px;margin-left:6px;
+  background:var(--amber-bg);color:var(--amber);font-weight:500;
+}
+
+/* ── GPO cards ─────────────────────────────────────── */
+.gpo-grid{display:flex;flex-direction:column;gap:6px}
+.gpo-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  cursor:pointer;transition:border-color .15s,background .15s;overflow:hidden;
+}
+.gpo-card:hover{border-color:var(--border2);background:var(--surface2)}
+.gpo-card-head{display:flex;align-items:center;gap:12px;padding:12px 16px}
+.gpo-name{font-size:13px;font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gpo-badges{display:flex;gap:5px;align-items:center;flex-shrink:0;flex-wrap:wrap}
+.badge{
+  font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;
+  white-space:nowrap;
+}
+.badge.score-good{background:var(--green-bg);color:var(--green)}
+.badge.score-mid{background:var(--amber-bg);color:var(--amber)}
+.badge.score-bad{background:var(--red-bg);color:var(--red)}
+.badge.enforced{background:rgba(224,82,82,.12);color:var(--red)}
+.badge.disabled{background:var(--surface3);color:var(--txt3)}
+.badge.wmi{background:rgba(212,137,42,.12);color:var(--amber)}
+.badge.orphan{background:var(--blue-bg);color:var(--blue)}
+
+.gpo-card-body{
+  display:none;padding:0 16px 14px;border-top:1px solid var(--border);
+}
+.gpo-card-body.open{display:block}
+.gpo-ou-list{margin:10px 0;display:flex;flex-direction:column;gap:4px}
+.ou-row{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--txt2)}
+.ou-depth{color:var(--txt3);font-size:10px;min-width:20px}
+.ou-name{font-family:'JetBrains Mono',monospace;flex:1}
+.gpo-params-preview{
+  margin-top:8px;display:flex;flex-wrap:wrap;gap:4px;
+}
+.param-chip{
+  font-size:10px;padding:2px 7px;border-radius:3px;
+  background:var(--surface2);border:1px solid var(--border);
+  color:var(--txt3);font-family:'JetBrains Mono',monospace;
+}
+.param-chip.alert{background:var(--red-bg);border-color:rgba(224,82,82,.25);color:var(--red)}
+
+/* ── Onglet Diagnostic ─────────────────────────────── */
+.search-bar{
+  position:relative;margin-bottom:16px;
+}
+.search-bar input{
+  width:100%;padding:14px 16px 14px 46px;
+  background:var(--surface);border:1px solid var(--border2);border-radius:8px;
+  color:var(--txt);font-size:14px;font-family:'Inter',sans-serif;
+  outline:none;transition:border-color .15s,box-shadow .15s;
+}
+.search-bar input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(74,127,212,.12)}
+.search-bar input::placeholder{color:var(--txt3)}
+.search-icon{position:absolute;left:16px;top:50%;transform:translateY(-50%);color:var(--txt3);font-size:16px;pointer-events:none}
+
+.search-hint{font-size:11px;color:var(--txt3);margin-bottom:14px}
+
+/* Boutons raccourcis */
+.shortcut-group{margin-bottom:20px}
+.shortcut-label{font-size:10px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+.shortcut-row{display:flex;flex-wrap:wrap;gap:6px}
+.shortcut-btn{
+  padding:6px 12px;border-radius:6px;border:1px solid var(--border);
+  background:none;cursor:pointer;font-size:12px;color:var(--txt2);
+  font-family:'Inter',sans-serif;transition:all .12s;
+}
+.shortcut-btn:hover{border-color:var(--border2);color:var(--txt);background:var(--surface2)}
+.shortcut-btn.combo{border-color:var(--teal);color:var(--teal)}
+.shortcut-btn.combo:hover{background:var(--teal-bg)}
+
+/* Résultats recherche */
+.search-result-header{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border);
+  font-size:12px;color:var(--txt2);
+}
+.syn-badge{font-size:10px;color:var(--teal);background:var(--teal-bg);padding:2px 6px;border-radius:3px}
+
+.result-gpo{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  margin-bottom:10px;overflow:hidden;
+}
+.result-gpo-head{
+  display:flex;align-items:center;gap:10px;padding:12px 16px;
+  background:var(--surface2);cursor:pointer;
+}
+.result-gpo-name{font-size:13px;font-weight:600;flex:1}
+.covered-badges{display:flex;gap:4px}
+.covered-badge{font-size:10px;padding:1px 6px;border-radius:3px;background:var(--teal-bg);color:var(--teal);font-weight:600}
+
+/* Bandeau diagnostic OU */
+.diag-banner{
+  padding:8px 16px;background:var(--surface);
+  border-top:1px solid var(--border);
+  display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap;
+}
+.diag-section{min-width:120px}
+.diag-label{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--txt3);margin-bottom:4px;font-weight:600}
+.diag-ou-row{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--txt2);font-family:'JetBrains Mono',monospace}
+
+/* Tableau résultats */
+.result-table{width:100%;border-collapse:collapse}
+.result-table td{
+  padding:6px 12px;border-bottom:1px solid var(--border);
+  font-size:11px;vertical-align:middle;
+}
+.result-table tr:last-child td{border-bottom:none}
+.result-table tr{cursor:pointer;transition:background .1s}
+.result-table tr:hover{background:var(--surface2)}
+.rt-type{color:var(--txt3);white-space:nowrap;width:140px}
+.rt-key{font-weight:500;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rt-val{font-family:'JetBrains Mono',monospace;color:var(--txt2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rt-ctx{color:var(--txt3);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:0 1px}
+
+/* État vide */
+.empty-state{text-align:center;padding:60px 20px;color:var(--txt3)}
+.empty-state .es-icon{font-size:48px;margin-bottom:16px}
+.empty-state .es-title{font-size:15px;font-weight:500;color:var(--txt2);margin-bottom:8px}
+.empty-state .es-sub{font-size:13px;line-height:1.8}
+
+/* ── Inventaire ─────────────────────────────────────── */
+.inv-tabs{display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:0}
+.inv-tab{
+  padding:8px 16px;font-size:12px;font-weight:500;color:var(--txt3);
+  cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;
+  transition:color .12s;
+}
+.inv-tab:hover{color:var(--txt2)}
+.inv-tab.active{color:var(--blue);border-bottom-color:var(--blue)}
+
+.inv-panel{display:none}
+.inv-panel.active{display:block}
+
+/* OU cards */
+.ou-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  margin-bottom:8px;overflow:hidden;
+}
+.ou-card-head{
+  display:flex;align-items:center;gap:10px;padding:12px 16px;
+  cursor:pointer;transition:background .1s;
+}
+.ou-card-head:hover{background:var(--surface2)}
+.ou-path{font-size:12px;font-family:'JetBrains Mono',monospace;flex:1;color:var(--txt2)}
+.ou-card-body{display:none;border-top:1px solid var(--border)}
+.ou-card-body.open{display:block}
+.ou-gpo-row{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 16px;border-bottom:1px solid var(--border);
+  font-size:12px;transition:background .1s;
+}
+.ou-gpo-row:last-child{border-bottom:none}
+.ou-gpo-row:hover{background:var(--surface2)}
+.ou-priority{min-width:60px;font-size:10px;color:var(--txt3);font-family:'JetBrains Mono',monospace}
+.ou-gpo-name{flex:1;color:var(--blue);cursor:pointer;font-weight:500}
+.ou-gpo-name:hover{text-decoration:underline}
+.ou-score{font-size:10px;font-weight:600}
+.ou-changed{font-size:10px;color:var(--txt3)}
+
+/* Type grid */
+.type-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-bottom:20px}
+.type-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  padding:14px;cursor:pointer;transition:all .12s;
+}
+.type-card:hover{border-color:var(--border2);background:var(--surface2)}
+.type-card .tc-icon{font-size:20px;margin-bottom:8px}
+.type-card .tc-name{font-size:12px;font-weight:500;margin-bottom:4px}
+.type-card .tc-count{font-size:11px;color:var(--txt3)}
+.type-card .tc-bar{height:3px;background:var(--surface3);border-radius:2px;margin-top:8px;overflow:hidden}
+.type-card .tc-fill{height:100%;background:var(--blue);border-radius:2px}
+
+/* ── Timeline ──────────────────────────────────────── */
+.tl-month{margin-bottom:20px}
+.tl-month-label{
+  font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;
+  letter-spacing:.06em;padding:4px 0;margin-bottom:8px;
+  border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;
+}
+.tl-item{
+  display:flex;align-items:flex-start;gap:12px;
+  padding:10px 14px;background:var(--surface);border:1px solid var(--border);
+  border-radius:6px;margin-bottom:5px;cursor:pointer;transition:all .12s;
+}
+.tl-item:hover{border-color:var(--border2);background:var(--surface2)}
+.tl-date{min-width:44px;text-align:right;flex-shrink:0}
+.tl-date .day{font-size:12px;font-weight:600;color:var(--txt)}
+.tl-date .yr{font-size:10px;color:var(--txt3)}
+.tl-info{flex:1;min-width:0}
+.tl-name{font-size:13px;font-weight:500;color:var(--blue);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tl-ous{font-size:10px;color:var(--txt3);margin-top:2px}
+.tl-badges{display:flex;gap:4px;align-items:center;flex-shrink:0}
+
+/* ── Fiche GPO détail ─────────────────────────────── */
+.gpo-detail-header{
+  padding:20px 32px 16px;border-bottom:1px solid var(--border);
+  background:var(--surface);
+}
+.gpo-detail-header h2{font-size:18px;font-weight:700}
+.gpo-detail-meta{display:flex;flex-wrap:wrap;gap:16px;margin-top:10px;font-size:12px;color:var(--txt2)}
+.gdm-item{display:flex;flex-direction:column;gap:2px}
+.gdm-item .gdm-l{font-size:10px;color:var(--txt3);text-transform:uppercase;letter-spacing:.04em}
+.gdm-item .gdm-v{font-family:'JetBrains Mono',monospace;color:var(--txt)}
+
+.wmi-alert{
+  margin:16px 32px 0;padding:12px 16px;
+  background:var(--amber-bg);border:1px solid rgba(212,137,42,.3);border-radius:6px;
+}
+.wmi-alert-title{font-size:12px;font-weight:600;color:var(--amber);margin-bottom:6px}
+.wmi-query{font-size:11px;font-family:'JetBrains Mono',monospace;background:var(--surface2);padding:6px 10px;border-radius:4px;color:var(--txt2);word-break:break-all;margin-top:6px}
+
+.gpo-detail-body{padding:20px 32px}
+
+.param-section{margin-bottom:16px;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden}
+.ps-head{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;transition:background .1s}
+.ps-head:hover{background:var(--surface2)}
+.ps-icon{font-size:14px}
+.ps-title{font-size:12px;font-weight:600;flex:1}
+.ps-count{font-size:11px;color:var(--txt3)}
+.ps-arr{font-size:11px;color:var(--txt3);transition:transform .15s}
+.ps-arr.open{transform:rotate(90deg)}
+.ps-body{display:none;border-top:1px solid var(--border)}
+.ps-body.open{display:block}
+.param-row{
+  display:flex;align-items:center;gap:8px;
+  padding:7px 14px;border-bottom:1px solid var(--border);font-size:12px;
+}
+.param-row:last-child{border-bottom:none}
+.param-key{color:var(--txt2);flex:1;min-width:0}
+.param-val{font-family:'JetBrains Mono',monospace;color:var(--txt);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.param-val.bad{color:var(--red)}
+.param-hint{font-size:10px;color:var(--txt3);margin-left:4px}
+
+/* ── Toolbar / filtres ─────────────────────────────── */
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.search-mini{position:relative;flex:1;min-width:180px}
+.search-mini input{
+  width:100%;padding:7px 10px 7px 30px;
+  background:var(--surface);border:1px solid var(--border);border-radius:6px;
+  color:var(--txt);font-size:12px;outline:none;
+}
+.search-mini input:focus{border-color:var(--blue)}
+.search-mini .si{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--txt3);font-size:13px;pointer-events:none}
+
+.filter-btn{
+  padding:5px 12px;border-radius:6px;border:1px solid var(--border);
+  background:none;cursor:pointer;font-size:11px;color:var(--txt2);
+  font-family:'Inter',sans-serif;transition:all .12s;white-space:nowrap;
+}
 .filter-btn:hover{border-color:var(--border2);color:var(--txt)}
 .filter-btn.on{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:500}
-.combo-btn{border-color:var(--teal);color:var(--teal)}
-.combo-btn:hover{background:rgba(45,212,191,.1);border-color:var(--teal)}
+.filter-btn.teal{border-color:var(--teal);color:var(--teal)}
+.filter-btn.teal:hover{background:var(--teal-bg)}
 
-/* ── GPO table ── */
-.gpo-table{width:100%;border-collapse:collapse}
-.gpo-table th{font-size:11px;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);font-weight:500}
-.gpo-table td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:13px}
-.gpo-table tbody tr{cursor:pointer;transition:background .1s}
-.gpo-table tbody tr:hover td{background:var(--surface2)}
-.gpo-table tbody tr:last-child td{border-bottom:none}
-.score-bar-wrap{display:flex;align-items:center;gap:8px}
-.score-bar{width:60px;height:3px;background:var(--surface3);overflow:hidden}
-.score-bar-fill{height:100%;transition:width .3s}
-.score-num{font-family:'JetBrains Mono',monospace;font-size:12px;min-width:28px}
-.flag{font-size:10px;padding:1px 7px;border-radius:4px;margin-left:4px;font-weight:500}
-.flag-orphan{background:var(--blue-dim);color:var(--blue)}
-.flag-disabled{background:var(--amber-dim);color:var(--amber)}
+.gpo-source-select{
+  font-size:11px;background:var(--surface);border:1px solid var(--border);
+  color:var(--txt2);padding:5px 10px;border-radius:6px;cursor:pointer;
+}
 
-/* ── GPO Detail ── */
-.back-btn{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border:1px solid var(--border);border-radius:3px;background:none;color:var(--txt2);cursor:pointer;font-size:12px;margin-bottom:16px;font-family:'Inter',sans-serif}
+/* ── Conflits / doublons ───────────────────────────── */
+.conflict-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  margin-bottom:8px;overflow:hidden;
+}
+.conflict-card.high{border-left:3px solid var(--red)}
+.conflict-card.low{border-left:3px solid var(--amber)}
+.cc-head{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer}
+.cc-head:hover{background:var(--surface2)}
+.cc-key{font-size:12px;font-family:'JetBrains Mono',monospace;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cc-body{display:none;padding:10px 14px;border-top:1px solid var(--border)}
+.cc-body.open{display:block}
+.cc-winner{font-size:11px;padding:6px 10px;background:var(--green-bg);border-radius:4px;margin-bottom:6px}
+.cc-loser{font-size:11px;padding:6px 10px;background:var(--red-bg);border-radius:4px;margin-bottom:4px}
+
+/* ── Info box ──────────────────────────────────────── */
+.info-box{
+  padding:10px 14px;background:var(--blue-bg);border:1px solid rgba(74,127,212,.2);
+  border-radius:6px;font-size:12px;color:var(--txt2);margin-bottom:16px;line-height:1.5;
+}
+
+/* ── Back btn ──────────────────────────────────────── */
+.back-btn{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:6px 12px;margin-bottom:16px;
+  background:var(--surface);border:1px solid var(--border);border-radius:6px;
+  font-size:12px;color:var(--txt2);cursor:pointer;font-family:'Inter',sans-serif;
+  transition:all .12s;
+}
 .back-btn:hover{border-color:var(--border2);color:var(--txt)}
-.gpo-detail-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:16px 20px;margin-bottom:12px}
-.gpo-detail-card h3{font-size:16px;font-weight:600;margin-bottom:6px}
-.gpo-meta-grid{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:var(--txt2);font-family:'JetBrains Mono',monospace}
-.gpo-meta-item span:first-child{color:var(--txt3);margin-right:4px}
-.section-block{background:var(--surface);border:1px solid var(--border);border-radius:3px;margin-bottom:6px;overflow:hidden}
-.section-head{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;transition:background .1s}
-.section-head:hover{background:var(--surface2)}
-.section-icon{font-size:15px}
-.section-title{flex:1;font-size:13px;font-weight:500}
-.section-count{font-size:11px;color:var(--txt3);margin-right:4px}
-.section-arr{font-size:10px;color:var(--txt3);transition:transform .15s}
-.section-arr.open{transform:rotate(90deg)}
-.section-body{display:none;border-top:1px solid var(--border)}
-.section-body.open{display:block}
-.param-table{width:100%;border-collapse:collapse;font-size:12px}
-.param-table td{padding:7px 14px;border-bottom:1px solid var(--border)}
-.param-table tr:last-child td{border-bottom:none}
-.param-table td:first-child{color:var(--txt2);width:42%}
-.param-bad{color:var(--red)}
-.param-alert-badge{font-size:10px;padding:1px 6px;border-radius:4px;background:var(--red-dim);color:var(--red);margin-left:6px}
 
-/* ── Type / OU views ── */
-.type-section{margin-bottom:28px}
-.type-header{display:flex;align-items:center;gap:12px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)}
-.ou-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;margin-bottom:6px;overflow:hidden}
-.ou-head{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;transition:background .1s}
-.ou-head:hover{background:var(--surface2)}
-.ou-body{display:none;border-top:1px solid var(--border);padding:8px 14px}
-.ou-body.open{display:block}
-.ou-gpo-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px}
-.ou-gpo-row:last-child{border-bottom:none}
+/* ── Export btns ───────────────────────────────────── */
+.export-btn{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:4px 10px;background:none;border:1px solid var(--border);
+  border-radius:4px;font-size:11px;color:var(--txt2);cursor:pointer;
+  font-family:'Inter',sans-serif;transition:all .12s;
+}
+.export-btn:hover{border-color:var(--border2);color:var(--txt);background:var(--surface2)}
 
-/* ── Category grid ── */
-.cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:24px}
-.cat-card{background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:14px;cursor:pointer;}
-.cat-card:hover{border-color:var(--border2);background:var(--surface2)}
-.cat-icon{font-size:22px;margin-bottom:8px}
-.cat-name{font-size:13px;font-weight:500;margin-bottom:4px}
-.cat-count{font-size:11px;color:var(--txt2)}
-.cat-bar{height:3px;border-radius:2px;background:var(--surface3);margin-top:8px;overflow:hidden}
-.cat-fill{height:100%;border-radius:2px;background:var(--blue);transition:width .4s}
+/* ── Graphiques dashboard ───────────────────────────── */
+.charts-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px}
+.chart-card h3{font-size:12px;font-weight:600;color:var(--txt2);margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em}
+.chart-wrap{position:relative;height:160px}
 
-/* ── Info box ── */
-.info-box{background:var(--blue-dim);border:1px solid var(--blue);border-left:3px solid var(--blue);border-radius:2px;padding:10px 14px;font-size:12px;color:var(--txt2);margin-bottom:16px;line-height:1.6}
-.warn-box{background:var(--amber-dim);border:1px solid var(--amber);border-left:3px solid var(--amber);border-radius:2px;padding:10px 14px;font-size:12px;color:var(--txt2);margin-bottom:8px}
-.stitle{font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.6px;margin:18px 0 10px}
-.mono-block{background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:12px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--txt2);line-height:2}
-.mono-comment{color:var(--txt3)}
+/* Légende donut */
+.donut-legend{display:flex;flex-direction:column;gap:5px;margin-top:10px}
+.dl-item{display:flex;align-items:center;gap:8px;font-size:11px}
+.dl-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 
-/* ── Scrollbar ── */
-::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
-
-/* ── Loading animation ── */
-.loader{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px}
-.loader-ring{width:32px;height:32px;border:2px solid var(--border2);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite}
-.loader-text{font-size:13px;color:var(--txt2)}
-@keyframes spin{to{transform:rotate(360deg)}}
-.loader.done{animation:fadeOut .4s ease forwards}
-@keyframes fadeOut{to{opacity:0;pointer-events:none}}
-
-/* ── Stagger animation ── */
-.stagger-item{opacity:0;transition:opacity .2s}
-.stagger-item.visible{opacity:1}
-
-/* ── Quick panel ── */
-.qp-finding{border-bottom:1px solid var(--border);padding:14px 18px;transition:background .1s}
-.qp-finding:last-child{border-bottom:none}
-.qp-finding:hover{background:var(--surface2)}
-.qp-finding-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:8px}
-.qp-title{flex:1;font-size:13px;font-weight:500;line-height:1.4}
-.qp-action{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:4px 10px;border-radius:6px;font-weight:500;margin-top:6px}
-.qp-action.modify{background:var(--amber-dim);color:var(--amber)}
-.qp-action.create{background:var(--blue-dim);color:var(--blue)}
-.qp-gpo-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.qp-gpo-chip{font-size:11px;padding:3px 10px;border-radius:2px;background:var(--surface3);color:var(--txt2);cursor:pointer;border:1px solid var(--border);font-family:'JetBrains Mono',monospace}
-.qp-gpo-chip:hover{border-color:var(--blue);color:var(--blue)}
-.qp-reco{font-size:12px;color:var(--txt2);padding:8px 10px;background:var(--surface2);border-radius:6px;border-left:2px solid var(--border2);line-height:1.6;margin-top:6px;display:none}
-.qp-finding.open .qp-reco{display:block}
-.qp-finding-toggle{font-size:11px;color:var(--txt3);cursor:pointer;transition:transform .15s;display:inline-block}
-.qp-finding.open .qp-finding-toggle{transform:rotate(90deg)}
-.mc.clickable:hover{background:var(--surface2)}
-
+/* ── Responsive ────────────────────────────────────── */
+@media(max-width:768px){
+  .sidebar{display:none}
+  .content-area{padding:16px}
+  .charts-row{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
 
-<!-- Loading -->
 <div class="loader" id="loader">
   <div class="loader-ring"></div>
-  <div class="loader-text">Chargement GPOctopus Audit…</div>
+  <div class="loader-text">Chargement de l'audit…</div>
 </div>
 
+<div class="app">
+
+<!-- ══ SIDEBAR ══════════════════════════════════════════════════════════════ -->
 <nav class="sidebar">
   <div class="sb-logo">
-    <h1>🐙 GPOctopus Audit</h1>
+    <h1>🐙 GPOctopus</h1>
     <p>{{ data.generated_at }} · {{ data.gpo_count }} GPO</p>
   </div>
 
   <div class="sb-score">
-    <div class="sb-score-ring">
-      <svg width="56" height="56" viewBox="0 0 56 56">
-        <circle cx="28" cy="28" r="22" fill="none" stroke="var(--surface3)" stroke-width="5"/>
-        <circle cx="28" cy="28" r="22" fill="none"
+    <div class="score-ring">
+      <svg width="52" height="52" viewBox="0 0 52 52">
+        <circle cx="26" cy="26" r="22" fill="none" stroke="var(--border2)" stroke-width="4"/>
+        <circle cx="26" cy="26" r="22" fill="none"
           stroke="{% if data.global_score>=70%}var(--green){% elif data.global_score>=40%}var(--amber){% else %}var(--red){% endif %}"
-          stroke-width="5" stroke-linecap="round"
-          stroke-dasharray="{{ (data.global_score * 1.382)|int }} 138.2"
-          id="score-arc"/>
+          stroke-width="4" stroke-linecap="round"
+          stroke-dasharray="{{ (data.global_score/100*138.2)|round(1) }} 138.2"/>
       </svg>
-      <div class="sb-score-val">
+      <div class="score-val">
         <span class="n" style="color:{% if data.global_score>=70%}var(--green){% elif data.global_score>=40%}var(--amber){% else %}var(--red){% endif %}">{{ data.global_score }}</span>
         <span class="l">/100</span>
       </div>
     </div>
-    <div class="sb-score-info">
+    <div class="score-info">
       <div class="label" style="color:{% if data.global_score>=70%}var(--green){% elif data.global_score>=40%}var(--amber){% else %}var(--red){% endif %}">
         {% if data.global_score>=70%}Satisfaisant{% elif data.global_score>=40%}À améliorer{% else %}Insuffisant{% endif %}
       </div>
-      <div class="sub">{{ data.criticals }} critique(s) · {{ data.warnings }} alerte(s)</div>
+      <div class="sub">{{ data.criticals }} critique · {{ data.warnings }} alerte<br>{{ data.compliant_count }} conforme · {{ data.orphan_count }} orpheline</div>
     </div>
   </div>
 
-  <div class="nav-group">
-    <div class="nav-label">Vue d'ensemble</div>
-    <div class="nav-item active" onclick="nav('dashboard',this)"><span class="nav-icon">◈</span>Tableau de bord</div>
-    <div class="nav-item" onclick="nav('priorities',this)">
-      <span class="nav-icon">▲</span>Priorités
-      {% if data.criticals > 0 %}<span class="nav-badge">{{ data.criticals }}</span>{% endif %}
+  <!-- Onglets principaux -->
+  <div class="main-tabs">
+    <div class="main-tab active" id="tab-btn-security" onclick="switchTab('security')">
+      <span class="tab-icon">🔒</span>
+      <span>Sécurité</span>
+      {% if data.criticals > 0 %}<span class="tab-badge">{{ data.criticals }}</span>{% endif %}
+    </div>
+    <div class="main-tab" id="tab-btn-diag" onclick="switchTab('diag')">
+      <span class="tab-icon">🔍</span>
+      <span>Diagnostic</span>
+    </div>
+    <div class="main-tab" id="tab-btn-inventory" onclick="switchTab('inventory')">
+      <span class="tab-icon">📋</span>
+      <span>Inventaire</span>
     </div>
   </div>
-  <div class="nav-group">
-    <div class="nav-label">Analyse</div>
-    <div class="nav-item" onclick="nav('search',this)"><span class="nav-icon">⌕</span>Recherche GPO</div>
-    <div class="nav-item" onclick="nav('findings',this)"><span class="nav-icon">⚑</span>Constatations RSOP</div>
-    <div class="nav-item" onclick="nav('gpolist',this)"><span class="nav-icon">≡</span>GPO par GPO</div>
-    <div class="nav-item" onclick="nav('bytype',this)"><span class="nav-icon">◫</span>Par type</div>
-    <div class="nav-item" onclick="nav('byou',this)"><span class="nav-icon">⊢</span>Par OU</div>
-    <div class="nav-item" onclick="nav('timeline',this)"><span class="nav-icon">⏱</span>Timeline</div>
+
+  <div class="sb-divider"></div>
+
+  <!-- Sous-nav contextuelle (change selon l'onglet) -->
+  <div class="sub-nav" id="subnav-security">
+    <div class="sub-nav-label">Sécurité</div>
+    <div class="sub-item active" onclick="showSub('security','overview')"><span class="si-icon">◈</span>Vue d'ensemble<span class="si-count">{{ data.total_findings }}</span></div>
+    <div class="sub-item" onclick="showSub('security','critical')"><span class="si-icon">🔴</span>Critiques<span class="si-count" style="color:var(--red)">{{ data.criticals }}</span></div>
+    <div class="sub-item" onclick="showSub('security','warnings')"><span class="si-icon">🟡</span>Alertes<span class="si-count" style="color:var(--amber)">{{ data.warnings }}</span></div>
+    <div class="sub-item" onclick="showSub('security','compliant')"><span class="si-icon">✅</span>Conformes<span class="si-count" style="color:var(--green)">{{ data.compliant_count }}</span></div>
+    <div class="sub-item" onclick="showSub('security','conflicts')"><span class="si-icon">⚡</span>Conflits<span class="si-count" style="color:{% if data.conflicts_high>0%}var(--red){% else %}var(--txt3){% endif %}">{{ data.conflicts_high + data.conflicts_low }}</span></div>
+    <div class="sub-item" onclick="showSub('security','orphans')"><span class="si-icon">◌</span>Orphelines<span class="si-count">{{ data.orphan_count }}</span></div>
   </div>
-  <div class="nav-group">
-    <div class="nav-label">Résultats</div>
-    <div class="nav-item" onclick="nav('compliant',this)"><span class="nav-icon">✓</span>Conformes ({{ data.compliant_count }})</div>
-    <div class="nav-item" onclick="nav('conflicts',this)">
-      <span class="nav-icon">⚡</span>Conflits GPO
-      {% if data.conflicts_high > 0 %}<span class="nav-badge">{{ data.conflicts_high }}</span>{% endif %}
-    </div>
-    <div class="nav-item" onclick="nav('orphans',this)"><span class="nav-icon">◌</span>Orphelines ({{ data.orphan_count }})</div>
+
+  <div class="sub-nav" id="subnav-diag" style="display:none">
+    <div class="sub-nav-label">Diagnostic</div>
+    <div class="sub-item active" onclick="showSub('diag','search')"><span class="si-icon">⌕</span>Recherche</div>
+    <div class="sub-item" onclick="showSub('diag','gpolist')"><span class="si-icon">≡</span>Toutes les GPO</div>
+    <div class="sub-item" onclick="showSub('diag','timeline')"><span class="si-icon">⏱</span>Timeline</div>
+  </div>
+
+  <div class="sub-nav" id="subnav-inventory" style="display:none">
+    <div class="sub-nav-label">Inventaire</div>
+    <div class="sub-item active" onclick="showSub('inventory','byou')"><span class="si-icon">⊢</span>Par OU</div>
+    <div class="sub-item" onclick="showSub('inventory','bytype')"><span class="si-icon">◫</span>Par type</div>
   </div>
 
   <div class="sb-footer">
-    <span style="font-size:11px;color:var(--txt3)">GPOctopus Audit · CIS · ANSSI · MS Baseline</span>
-    <div style="display:flex;gap:8px;align-items:center">
-      <div class="has-tooltip" style="cursor:pointer;font-size:18px;color:var(--txt3)" onclick="exportFindings('csv')" title="">
-        <span class="tooltip">Exporter findings CSV</span>⬇
-      </div>
-      <div class="has-tooltip" style="cursor:pointer;font-size:18px;color:var(--txt3)" onclick="exportFindings('md')" title="">
-        <span class="tooltip">Exporter findings Markdown</span>📋
-      </div>
-      <div class="theme-toggle has-tooltip" onclick="toggleTheme()" title="">
-        <span class="tooltip">Basculer thème</span>
-      </div>
+    <span style="font-size:10px;color:var(--txt3)">CIS · ANSSI · MS Baseline</span>
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="export-btn" onclick="exportFindings('csv')" title="Export CSV">⬇ CSV</button>
+      <button class="export-btn" onclick="exportFindings('md')" title="Export Markdown">📋 MD</button>
+      <div class="theme-btn" onclick="toggleTheme()" title="Changer le thème"></div>
     </div>
   </div>
 </nav>
 
-<main class="main">
+<!-- ══ MAIN ═════════════════════════════════════════════════════════════════ -->
+<main class="main" id="main-content">
 
-<!-- ══ DASHBOARD ══ -->
-<div id="view-dashboard" class="view active">
-  <div class="view-header">
-    <div class="view-title">Tableau de bord</div>
-    <div class="view-sub">{{ data.gpo_count }} GPO analysées · CIS Benchmarks · ANSSI · MS Security Baseline</div>
-  </div>
+<!-- ════════════════════ ONGLET SÉCURITÉ ════════════════════ -->
+<div class="tab-content active" id="tab-security">
 
-  <div class="metrics">
-    <div class="mc red clickable has-tooltip" onclick="openQuickPanel('critical')" style="cursor:pointer">
-      <div class="v">{{ data.criticals }}</div><div class="l">Critiques</div>
-      <div style="font-size:10px;color:var(--txt3);margin-top:4px">Cliquer pour voir →</div>
-      <span class="tooltip">Cliquez pour voir les problèmes critiques et les GPO à modifier</span>
+  <!-- SUB : Vue d'ensemble -->
+  <div id="sub-security-overview">
+    <div class="page-header">
+      <h2>🔒 Sécurité — Vue d'ensemble</h2>
+      <p>Ce qui ne va pas, ce qui est bien, ce qu'il faut faire</p>
     </div>
-    <div class="mc amber clickable has-tooltip" onclick="openQuickPanel('warning')" style="cursor:pointer">
-      <div class="v">{{ data.warnings }}</div><div class="l">Avertissements</div>
-      <div style="font-size:10px;color:var(--txt3);margin-top:4px">Cliquer pour voir →</div>
-      <span class="tooltip">Cliquez pour voir les avertissements et les GPO à modifier</span>
-    </div>
-    <div class="mc clickable has-tooltip" onclick="openQuickPanel('info')" style="cursor:pointer">
-      <div class="v">{{ data.infos }}</div><div class="l">Informatifs</div>
-      <div style="font-size:10px;color:var(--txt3);margin-top:4px">Cliquer pour voir →</div>
-      <span class="tooltip">Paramètres non configurés — cliquez pour voir les détails</span>
-    </div>
-    <div class="mc green clickable has-tooltip" onclick="openQuickPanel('compliant')" style="cursor:pointer">
-      <div class="v">{{ data.compliant_count }}</div><div class="l">Conformes</div>
-      <div style="font-size:10px;color:var(--txt3);margin-top:4px">Cliquer pour voir →</div>
-      <span class="tooltip">Cliquez pour voir les contrôles conformes</span>
-    </div>
-    <div class="mc blue clickable has-tooltip" onclick="openQuickPanel('orphan')" style="cursor:pointer">
-      <div class="v">{{ data.orphan_count }}</div><div class="l">Orphelines</div>
-      <div style="font-size:10px;color:var(--txt3);margin-top:4px">Cliquer pour voir →</div>
-      <span class="tooltip">GPO non liées à une OU — cliquez pour voir la liste</span>
-    </div>
-    <div class="mc clickable has-tooltip" onclick="nav('conflicts',document.querySelector('[onclick*=conflicts]'))" style="cursor:pointer">
-      <div class="v" style="color:{% if data.conflicts_high > 0 %}var(--red){% else %}var(--amber){% endif %}">{{ data.gpo_conflicts|length }}</div>
-      <div class="l">Conflits GPO</div>
-      <div style="font-size:10px;color:var(--txt3);margin-top:4px">{{ data.conflicts_high }} critique(s) →</div>
-      <span class="tooltip">Même paramètre, valeurs différentes dans plusieurs GPO — l'ordre d'application détermine ce qui s'applique</span>
-    </div>
-    <div class="mc clickable has-tooltip" onclick="openQuickPanel('all')" style="cursor:pointer">
-      <div class="v">{{ data.gpo_count }}</div><div class="l">GPO totales</div>
-      <div style="font-size:10px;color:var(--txt3);margin-top:4px">Cliquer pour voir →</div>
-      <span class="tooltip">Cliquez pour voir toutes les GPO et les doublons</span>
-    </div>
-  </div>
-
-  <!-- Panel rapide findings -->
-  <div id="quick-panel" style="display:none;margin-bottom:24px">
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:3px;overflow:hidden">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)">
-        <span id="qp-title" style="font-size:14px;font-weight:600"></span>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="filter-btn on" onclick="openQuickPanel(_qpSev)" style="font-size:11px;padding:4px 10px">Actualiser</button>
-          <button onclick="document.getElementById('quick-panel').style.display='none'" style="background:none;border:none;color:var(--txt3);cursor:pointer;font-size:16px">✕</button>
+    <div class="content-area">
+      <!-- Métriques -->
+      <div class="metrics-row">
+        <div class="metric-card red" onclick="showSub('security','critical')">
+          <div class="mv">{{ data.criticals }}</div>
+          <div class="ml">🔴 Critiques à corriger</div>
         </div>
-      </div>
-      <div id="qp-content" style="padding:0"></div>
-    </div>
-  </div>
-
-  <div class="charts-row">
-    <div class="chart-card">
-      <div class="chart-title">Répartition des constatations</div>
-      <div class="chart-wrap" style="height:180px"><canvas id="chart-donut"></canvas></div>
-    </div>
-    <div class="chart-card">
-      <div class="chart-title">Score par catégorie</div>
-      <div class="chart-wrap" style="height:180px"><canvas id="chart-radar"></canvas></div>
-    </div>
-  </div>
-
-  <div class="stitle">Types de contenu dans vos GPO</div>
-  <div class="cat-grid" id="cat-grid"></div>
-
-  {% if data.criticals > 0 %}
-  <div style="margin-top:20px">
-    <div class="stitle">Actions prioritaires</div>
-    <div id="dash-priorities"></div>
-    <button class="filter-btn on" style="margin-top:10px" onclick="nav('priorities',document.querySelector('[onclick*=priorities]'))">Voir toutes les priorités →</button>
-  </div>
-  {% endif %}
-</div>
-
-<!-- ══ PRIORITIES ══ -->
-<div id="view-priorities" class="view">
-  <div class="view-header">
-    <div class="view-title">Priorités d'action</div>
-    <div class="view-sub">Classées par impact — corrigez dans cet ordre</div>
-  </div>
-  <div id="priority-list"></div>
-</div>
-
-<!-- ══ SEARCH ══ -->
-<div id="view-search" class="view">
-  <div class="view-header">
-    <div class="view-title">⌕ Recherche &amp; Diagnostic GPO</div>
-    <div class="view-sub">Recherche multi-termes intelligente — synonymes automatiques · diagnostic causal OU/priorité inclus</div>
-  </div>
-
-  <div style="margin-bottom:16px">
-    <div style="position:relative">
-      <span style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--txt3);font-size:18px;pointer-events:none">⌕</span>
-      <input id="search-main-input" type="text"
-        placeholder="Ex: RDS imprimante · lecteur réseau startup · print01 logon · SMB proxy…"
-        style="width:100%;padding:14px 14px 14px 44px;background:var(--surface);border:1px solid var(--border2);border-radius:3px;color:var(--txt);font-size:14px;font-family:'Inter',sans-serif;outline:none;transition:border-color .15s;box-sizing:border-box"
-        oninput="globalSearch(this.value)"
-        onfocus="this.style.borderColor='var(--blue)'"
-        onblur="this.style.borderColor='var(--border2)'"
-      >
-    </div>
-    <div style="font-size:11px;color:var(--txt3);margin-top:6px;padding-left:2px">
-      💡 Plusieurs mots = ET automatique · Synonymes inclus automatiquement (ex: "RDS" trouve aussi "Terminal Services", "RemoteApp")
-    </div>
-  </div>
-
-  <!-- Raccourcis simples -->
-  <div style="margin-bottom:10px">
-    <div style="font-size:11px;color:var(--txt3);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Raccourcis simples</div>
-    <div style="display:flex;flex-wrap:wrap;gap:5px">
-      <button class="filter-btn" onclick="quickSearch('imprimante')">🖨 Imprimantes</button>
-      <button class="filter-btn" onclick="quickSearch('lecteur réseau')">💾 Lecteurs réseau</button>
-      <button class="filter-btn" onclick="quickSearch('script')">📜 Scripts</button>
-      <button class="filter-btn" onclick="quickSearch('tâche planifiée')">⏰ Tâches planifiées</button>
-      <button class="filter-btn" onclick="quickSearch('service windows')">🔧 Services</button>
-      <button class="filter-btn" onclick="quickSearch('registre')">🗝 Registre</button>
-      <button class="filter-btn" onclick="quickSearch('groupe local')">👥 Groupes locaux</button>
-      <button class="filter-btn" onclick="quickSearch('raccourci')">🔗 Raccourcis</button>
-    </div>
-  </div>
-
-  <!-- Combinaisons diagnostic -->
-  <div style="margin-bottom:16px">
-    <div style="font-size:11px;color:var(--txt3);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.05em">🔗 Combinaisons diagnostic — GPO touchant plusieurs domaines à la fois</div>
-    <div style="display:flex;flex-wrap:wrap;gap:5px">
-      <button class="filter-btn combo-btn" onclick="quickSearch('imprimante lecteur')" title="GPO qui mappent à la fois des imprimantes ET des lecteurs réseau">🖨+💾 Imprimante &amp; Lecteur</button>
-      <button class="filter-btn combo-btn" onclick="quickSearch('RDS imprimante')" title="GPO RDS/Terminal Services liées à des imprimantes">🖥+🖨 RDS &amp; Imprimante</button>
-      <button class="filter-btn combo-btn" onclick="quickSearch('logon script imprimante')" title="Scripts logon qui configurent aussi des imprimantes">📜+🖨 Script logon &amp; Imprimante</button>
-      <button class="filter-btn combo-btn" onclick="quickSearch('startup script lecteur')" title="Scripts démarrage qui mappent des lecteurs réseau">📜+💾 Script startup &amp; Lecteur</button>
-      <button class="filter-btn combo-btn" onclick="quickSearch('tâche planifiée script')" title="GPO avec tâches planifiées ET scripts">⏰+📜 Tâche &amp; Script</button>
-      <button class="filter-btn combo-btn" onclick="quickSearch('service registre')" title="GPO qui configurent des services ET le registre">🔧+🗝 Service &amp; Registre</button>
-      <button class="filter-btn combo-btn" onclick="quickSearch('groupe logon')" title="GPO qui gèrent des groupes locaux ET des scripts de session">👥+📜 Groupe &amp; Script logon</button>
-      <button class="filter-btn combo-btn" onclick="quickSearch('proxy internet')" title="GPO de configuration proxy/Internet">🌐 Proxy &amp; Internet</button>
-    </div>
-  </div>
-
-  <!-- Filtres par type -->
-  <div id="search-type-filters" style="display:none;margin-bottom:16px">
-    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
-      <span style="font-size:11px;color:var(--txt3)">Filtrer par type :</span>
-      <button class="filter-btn on" onclick="filtSearchType('all',this)">Tous</button>
-      <span id="search-type-btns"></span>
-    </div>
-  </div>
-
-  <!-- Header résultats -->
-  <div id="search-results-header" style="display:none;margin-bottom:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-    <span id="search-count" style="font-size:13px;color:var(--txt2)"></span>
-    <span id="search-gpo-count" style="font-size:12px;color:var(--txt3)"></span>
-    <span id="search-synonym-hint" style="font-size:11px;color:var(--teal)"></span>
-  </div>
-
-  <div id="search-results"></div>
-
-  <!-- État initial -->
-  <div id="search-empty-state" style="text-align:center;padding:50px 20px;color:var(--txt3)">
-    <div style="font-size:48px;margin-bottom:16px">⌕</div>
-    <div style="font-size:15px;font-weight:500;margin-bottom:8px">Recherche intelligente multi-termes</div>
-    <div style="font-size:13px;line-height:2;margin-bottom:16px">
-      <strong style="color:var(--txt2)">Exemple :</strong> tapez <code style="background:var(--surface2);padding:2px 6px;border-radius:3px">RDS imprimante</code><br>
-      → trouve toutes les GPO qui touchent à la fois RDS <em>et</em> des imprimantes<br>
-      → affiche l'OU liée, si la GPO est forcée (Enforced), et pourquoi elle s'applique
-    </div>
-    <div style="font-size:12px;color:var(--txt3);line-height:1.8">
-      Chemin UNC · Lettre de lecteur · Nom de script · Clé de registre<br>
-      Nom de service · Commande · Nom de groupe · Paramètre de sécurité<br>
-      <span style="color:var(--teal)">+ synonymes : RDS↔Terminal Services · SMB↔CIFS · GPO↔stratégie…</span>
-    </div>
-  </div>
-</div>
-
-<!-- ══ FINDINGS ══ -->
-<div id="view-findings" class="view">
-  <div class="view-header">
-    <div class="view-title">Constatations RSOP</div>
-    <div class="view-sub">Résultat après fusion de toutes les GPO — ce qui s'applique réellement</div>
-  </div>
-  <div class="info-box">
-    Le <strong>RSOP</strong> simule ce que Windows applique après avoir fusionné toutes vos GPO.
-    <span style="background:var(--amber-dim);color:var(--amber);font-size:10px;padding:1px 6px;border-radius:4px;margin-left:4px">non configuré</span>
-    = paramètre absent, valeur par défaut Windows appliquée.
-  </div>
-  <div class="toolbar">
-    <div class="search-box">
-      <span class="search-icon">⌕</span>
-      <input type="text" placeholder="Rechercher une constatation…" oninput="searchFindings(this.value)">
-    </div>
-    <button class="filter-btn on" onclick="filtF('all',this)">Tous ({{ data.total_findings }})</button>
-    <button class="filter-btn" onclick="filtF('critical',this)">Critique ({{ data.criticals }})</button>
-    <button class="filter-btn" onclick="filtF('warning',this)">Avert. ({{ data.warnings }})</button>
-    <button class="filter-btn" onclick="filtF('info',this)">Info ({{ data.infos }})</button>
-  </div>
-  <div id="findings-list">
-  {% for f in data.all_findings %}
-  <div class="finding-card stagger-item" data-sev="{{ f.severity }}" data-txt="{{ f.title|lower }} {{ f.category|lower }} {{ f.ref|lower }}">
-    <div class="fc-head" onclick="togFC(this)">
-      <div class="sev-dot {{ f.severity }}"></div>
-      <div>
-        <div class="fc-title">{{ f.title }}{% if f.get('not_configured') %}<span class="nc-tag">non configuré</span>{% endif %}</div>
-        <div style="font-size:11px;color:var(--txt3);margin-top:1px">{{ f.category }}</div>
-      </div>
-      <span class="sev-pill {{ f.severity }}" style="margin-left:auto;margin-right:8px">{{ f.severity }}</span>
-      <div class="fc-arr">▶</div>
-    </div>
-    <div class="fc-body">
-      <div class="fc-detail">{{ f.detail }}</div>
-      <div class="fc-ref">{{ f.ref }}</div>
-      <div class="fc-reco">{{ f.remediation }}</div>
-    </div>
-  </div>
-  {% endfor %}
-  {% if not data.all_findings %}
-  <div style="text-align:center;padding:48px;color:var(--txt3)">🎉 Aucun écart détecté</div>
-  {% endif %}
-  </div>
-</div>
-
-<!-- ══ GPO LIST ══ -->
-<div id="view-gpolist" class="view">
-  <div class="view-header">
-    <div class="view-title">GPO par GPO</div>
-    <div class="view-sub">Cliquez sur une GPO pour voir son contenu complet</div>
-  </div>
-  <div class="toolbar">
-    <div class="search-box">
-      <span class="search-icon">⌕</span>
-      <input type="text" placeholder="Rechercher une GPO…" oninput="searchGPO(this.value)">
-    </div>
-    <button class="filter-btn on" onclick="filtG('all',this)">Toutes</button>
-    <button class="filter-btn" onclick="filtG('issues',this)">Problèmes</button>
-    <button class="filter-btn" onclick="filtG('empty',this)">Vides</button>
-    <button class="filter-btn" onclick="filtG('orphan',this)">Orphelines</button>
-  </div>
-  <div id="gpo-list-area"></div>
-</div>
-
-<!-- ══ GPO DETAIL ══ -->
-<div id="view-gpodetail" class="view">
-  <button class="back-btn" onclick="nav('gpolist',document.querySelector('[onclick*=gpolist]'))">← Retour à la liste</button>
-  <div id="gpo-detail-content"></div>
-</div>
-
-<!-- ══ BY TYPE ══ -->
-<div id="view-bytype" class="view">
-  <div class="view-header">
-    <div class="view-title">Par type de contenu</div>
-    <div class="view-sub">Toutes vos GPO regroupées par ce qu'elles configurent</div>
-  </div>
-  <div id="bytype-content"></div>
-</div>
-
-<!-- ══ BY OU ══ -->
-<div id="view-byou" class="view">
-  <div class="view-header">
-    <div class="view-title">Par unité organisationnelle</div>
-    <div class="view-sub">Quelles GPO s'appliquent sur quelle OU</div>
-  </div>
-  <div class="toolbar">
-    <div class="search-box">
-      <span class="search-icon">⌕</span>
-      <input type="text" placeholder="Rechercher une OU…" oninput="searchOU(this.value)">
-    </div>
-  </div>
-  <div id="byou-content"></div>
-</div>
-
-<!-- ══ COMPLIANT ══ -->
-<div id="view-compliant" class="view">
-  <div class="view-header">
-    <div class="view-title">Contrôles conformes</div>
-    <div class="view-sub">Ces paramètres sont correctement configurés dans votre RSOP</div>
-  </div>
-  {% for r in data.compliant_rules %}
-  <div class="finding-card stagger-item">
-    <div class="fc-head" onclick="togFC(this)">
-      <div class="sev-dot" style="background:var(--green)"></div>
-      <div>
-        <div class="fc-title">{{ r.title }}</div>
-        <div style="font-size:11px;color:var(--txt3);margin-top:1px">{{ r.category }}</div>
-      </div>
-      <span class="sev-pill" style="background:var(--green-dim);color:var(--green);margin-left:auto;margin-right:8px">conforme</span>
-      <div class="fc-arr">▶</div>
-    </div>
-    <div class="fc-body">
-      <div class="fc-ref">{{ r.ref }}</div>
-    </div>
-  </div>
-  {% endfor %}
-</div>
-
-<!-- ══ CONFLICTS ══ -->
-<div id="view-conflicts" class="view">
-  <div class="view-header">
-    <div class="view-title">⚡ Conflits GPO</div>
-    <div class="view-sub">Même paramètre configuré avec des valeurs différentes dans plusieurs GPO — l'ordre d'application détermine ce qui s'applique réellement</div>
-  </div>
-
-  {% if data.gpo_conflicts %}
-  {% if data.conflicts_high > 0 %}
-  <div class="warn-box" style="border-color:var(--red);background:var(--red-dim);margin-bottom:16px">
-    <strong style="color:var(--red)">⚡ {{ data.conflicts_high }} conflit(s) sur des paramètres de sécurité sensibles</strong> —
-    la GPO gagnante peut masquer une mauvaise configuration appliquée dans une autre GPO.
-    Vérifiez l'ordre d'application et supprimez la valeur dans la GPO perdante.
-  </div>
-  {% endif %}
-
-  <div class="info-box">
-    <strong>Comment lire un conflit :</strong> la GPO <strong>gagnante</strong> est celle dont la valeur s'applique réellement (priorité la plus haute ou Enforced).
-    Les GPO <strong>perdantes</strong> configurent le même paramètre avec une valeur différente — leurs valeurs sont écrasées silencieusement.
-    Un conflit n'est pas toujours une erreur, mais il indique souvent une GPO oubliée ou une configuration incohérente.
-  </div>
-
-  <div class="toolbar">
-    <div class="search-box">
-      <span class="search-icon">⌕</span>
-      <input type="text" placeholder="Rechercher un conflit…" oninput="searchConflicts(this.value)">
-    </div>
-    <button class="filter-btn on"  onclick="filtConflicts('all',this)">Tous ({{ data.gpo_conflicts|length }})</button>
-    <button class="filter-btn"     onclick="filtConflicts('high',this)">Sécurité ({{ data.conflicts_high }})</button>
-    <button class="filter-btn"     onclick="filtConflicts('low',this)">Autres ({{ data.conflicts_low }})</button>
-  </div>
-
-  <div id="conflicts-list">
-  {% for c in data.gpo_conflicts %}
-  <div class="finding-card stagger-item conflict-card"
-       data-sec="{{ 'true' if c.is_security else 'false' }}"
-       data-txt="{{ c.key_short }} {{ c.section_label|lower }} {{ c.label|lower }}">
-    <div class="fc-head" onclick="togFC(this)">
-      <div class="sev-dot" style="background:{% if c.is_security %}var(--red){% else %}var(--amber){% endif %}"></div>
-      <div style="flex:1">
-        <div class="fc-title">{{ c.key_short }}</div>
-        <div style="font-size:11px;color:var(--txt3);margin-top:1px">
-          {{ c.section_label }} · {{ c.gpo_count }} GPO en conflit
-          {% if c.enforced_wins %}<span style="color:var(--amber);margin-left:6px">⚑ Enforced prioritaire</span>{% endif %}
+        <div class="metric-card amber" onclick="showSub('security','warnings')">
+          <div class="mv">{{ data.warnings }}</div>
+          <div class="ml">🟡 Alertes à surveiller</div>
         </div>
-      </div>
-      <span class="sev-pill {% if c.is_security %}critical{% else %}warning{% endif %}" style="margin-right:8px">
-        {% if c.is_security %}sécurité{% else %}configuration{% endif %}
-      </span>
-      <div class="fc-arr">▶</div>
-    </div>
-    <div class="fc-body">
-      <!-- Valeurs en conflit -->
-      <div style="margin-bottom:12px">
-        <div style="font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">Valeurs en conflit</div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px">
-          {% for v in c.conflict_values %}
-          <span style="font-size:12px;padding:4px 10px;border-radius:6px;font-family:'JetBrains Mono',monospace;
-                       background:{% if v == c.winner.value %}var(--green-dim){% else %}var(--red-dim){% endif %};
-                       color:{% if v == c.winner.value %}var(--green){% else %}var(--red){% endif %};
-                       border:1px solid {% if v == c.winner.value %}var(--green){% else %}var(--red){% endif %}">
-            {% if v == c.winner.value %}✔ {{ v }} (appliquée){% else %}✘ {{ v }} (écrasée){% endif %}
-          </span>
-          {% endfor %}
+        <div class="metric-card green" onclick="showSub('security','compliant')">
+          <div class="mv">{{ data.compliant_count }}</div>
+          <div class="ml">✅ Paramètres conformes</div>
+        </div>
+        <div class="metric-card blue" onclick="showSub('security','conflicts')">
+          <div class="mv">{{ data.conflicts_high + data.conflicts_low }}</div>
+          <div class="ml">⚡ Conflits GPO</div>
         </div>
       </div>
 
-      <!-- GPO gagnante -->
-      <div style="margin-bottom:8px">
-        <div style="font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">GPO gagnante</div>
-        <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--green-dim);border-radius:2px;border:1px solid var(--green)">
-          <span style="color:var(--green)">✔</span>
-          <span style="font-size:13px;font-weight:500;cursor:pointer;color:var(--green)" onclick="showGPODetail('{{ c.winner.gpo_guid }}')">{{ c.winner.gpo_name }}</span>
-          <span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--txt2);margin-left:4px">= {{ c.winner.value }}</span>
-          {% if c.winner.enforced %}<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:var(--amber-dim);color:var(--amber)">ENFORCED</span>{% endif %}
+      <!-- Graphiques -->
+      <div class="charts-row">
+        <div class="chart-card">
+          <h3>Répartition des constatations</h3>
+          <div class="chart-wrap"><canvas id="chart-donut"></canvas></div>
+          <div class="donut-legend">
+            <div class="dl-item"><div class="dl-dot" style="background:var(--red)"></div><span>{{ data.criticals }} critique(s)</span></div>
+            <div class="dl-item"><div class="dl-dot" style="background:var(--amber)"></div><span>{{ data.warnings }} alerte(s)</span></div>
+            <div class="dl-item"><div class="dl-dot" style="background:var(--blue)"></div><span>{{ data.infos }} info(s)</span></div>
+            <div class="dl-item"><div class="dl-dot" style="background:var(--green)"></div><span>{{ data.compliant_count }} conforme(s)</span></div>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3>Score par catégorie</h3>
+          <div class="chart-wrap"><canvas id="chart-radar"></canvas></div>
         </div>
       </div>
 
-      <!-- GPO perdantes -->
-      <div style="margin-bottom:10px">
-        <div style="font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">GPO perdante(s) — valeur écrasée</div>
-        {% for loser in c.losers %}
-        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--red-dim);border-radius:2px;border:1px solid var(--red);margin-bottom:4px">
-          <span style="color:var(--red)">✘</span>
-          <span style="font-size:13px;font-weight:500;cursor:pointer;color:var(--red)" onclick="showGPODetail('{{ loser.gpo_guid }}')">{{ loser.gpo_name }}</span>
-          <span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--txt2);margin-left:4px">= {{ loser.value }}</span>
-          {% if loser.enforced %}<span style="font-size:10px;padding:1px 6px;border-radius:4px;background:var(--amber-dim);color:var(--amber)">ENFORCED</span>{% endif %}
+      <!-- Priorités : top 5 critiques -->
+      {% set crit_findings = data.all_findings | selectattr('severity','eq','critical') | list %}
+      {% if crit_findings %}
+      <div class="section-title">🔴 Actions prioritaires <span class="st-count">{{ crit_findings|length }} à corriger</span></div>
+      <div class="finding-list">
+        {% for f in crit_findings[:5] %}
+        <div class="finding-card critical" data-rule="{{ f.rule_id }}" data-sev="critical" data-txt="{{ f.title|lower }} {{ f.category|lower }}">
+          <div class="fc-head" onclick="togFC(this)">
+            <div class="fc-sev critical"></div>
+            <div class="fc-main">
+              <div class="fc-title">{{ f.title }}</div>
+              <div class="fc-meta">
+                <span>{{ f.category }}</span>
+                {% if f.source_gpos %}<span>·</span>
+                {% for sg in f.source_gpos[:2] %}<span class="fc-gpo-link" onclick="event.stopPropagation();openGPODetail('{{ sg.guid }}')">{{ sg.name }}</span>{% endfor %}
+                {% if f.source_gpos|length > 2 %}<span>+{{ f.source_gpos|length - 2 }}</span>{% endif %}
+                {% endif %}
+              </div>
+            </div>
+            <button class="btn-explain" onclick="event.stopPropagation();explainFinding(this,'{{ f.rule_id }}','{{ f.title|replace("'","&#39;") }}','{{ f.remediation|replace("'","&#39;")|replace('"','&quot;') }}')">💬</button>
+            <span class="fc-arrow">▶</span>
+          </div>
+          <div class="fc-body">
+            <div class="fc-detail">{{ f.detail }}</div>
+            <div class="fc-ref">{{ f.ref }}</div>
+            <div class="fc-reco">✅ {{ f.remediation }}</div>
+            {% if f.source_gpos %}<div class="fc-sources">GPO : {% for sg in f.source_gpos %}<span class="fc-gpo-link" onclick="openGPODetail('{{ sg.guid }}')">{{ sg.name }}</span>{% endfor %}</div>{% endif %}
+            {% if f.action_label %}<div style="margin-top:8px;font-size:11px;padding:4px 8px;background:var(--surface2);border-radius:3px;color:var(--txt2)">🔧 {{ f.action_label }}</div>{% endif %}
+            <div class="explain-zone" id="ez-{{ f.rule_id }}"></div>
+          </div>
+        </div>
+        {% endfor %}
+        {% if crit_findings|length > 5 %}
+        <button class="filter-btn" style="width:100%;margin-top:4px" onclick="showSub('security','critical')">Voir tous les {{ crit_findings|length }} critiques →</button>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      <!-- Alertes résumé -->
+      {% set warn_findings = data.all_findings | selectattr('severity','eq','warning') | list %}
+      {% if warn_findings %}
+      <div class="section-title">🟡 Alertes <span class="st-count">{{ warn_findings|length }}</span></div>
+      <div class="finding-list">
+        {% for f in warn_findings[:3] %}
+        <div class="finding-card warning" data-sev="warning">
+          <div class="fc-head" onclick="togFC(this)">
+            <div class="fc-sev warning"></div>
+            <div class="fc-main">
+              <div class="fc-title">{{ f.title }}</div>
+              <div class="fc-meta"><span>{{ f.category }}</span></div>
+            </div>
+            <button class="btn-explain" onclick="event.stopPropagation();explainFinding(this,'{{ f.rule_id }}','{{ f.title|replace("'","&#39;") }}','{{ f.remediation|replace("'","&#39;")|replace('"','&quot;') }}')">💬</button>
+            <span class="fc-arrow">▶</span>
+          </div>
+          <div class="fc-body">
+            <div class="fc-detail">{{ f.detail }}</div>
+            <div class="fc-ref">{{ f.ref }}</div>
+            <div class="fc-reco">✅ {{ f.remediation }}</div>
+            {% if f.source_gpos %}<div class="fc-sources">GPO : {% for sg in f.source_gpos %}<span class="fc-gpo-link" onclick="openGPODetail('{{ sg.guid }}')">{{ sg.name }}</span>{% endfor %}</div>{% endif %}
+            <div class="explain-zone" id="ez-{{ f.rule_id }}-w"></div>
+          </div>
+        </div>
+        {% endfor %}
+        {% if warn_findings|length > 3 %}
+        <button class="filter-btn" style="width:100%;margin-top:4px" onclick="showSub('security','warnings')">Voir toutes les {{ warn_findings|length }} alertes →</button>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% if not data.all_findings %}
+      <div class="empty-state"><div class="es-icon">🎉</div><div class="es-title">Aucun écart détecté</div><div class="es-sub">Toutes les règles CIS / ANSSI / MS Baseline sont respectées.</div></div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- SUB : Critiques -->
+  <div id="sub-security-critical" style="display:none">
+    <div class="page-header">
+      <h2>🔴 Constatations critiques</h2>
+      <p>{{ data.criticals }} problème(s) à corriger en priorité</p>
+    </div>
+    <div class="content-area">
+      <div class="toolbar">
+        <div class="search-mini"><span class="si">⌕</span><input type="text" placeholder="Filtrer…" oninput="filterFindingsSub(this.value,'critical')"></div>
+        <select class="gpo-source-select" id="gpo-sel-critical" onchange="filtFByGPO(this.value,'critical')">
+          <option value="">Toutes les GPO</option>
+          {% for gpo in data.gpo_reports %}{% if gpo.findings | selectattr('severity','eq','critical') | list %}<option value="{{ gpo.guid }}">{{ gpo.name }}</option>{% endif %}{% endfor %}
+        </select>
+        <button class="export-btn" onclick="exportFindings('csv')">⬇ CSV</button>
+      </div>
+      <div class="finding-list" id="fl-critical">
+        {% for f in data.all_findings | selectattr('severity','eq','critical') | list %}
+        <div class="finding-card critical" data-sev="critical" data-txt="{{ f.title|lower }} {{ f.category|lower }}" data-guids="{{ (f.source_gpos or [])|map(attribute='guid')|join(',') }}">
+          <div class="fc-head" onclick="togFC(this)">
+            <div class="fc-sev critical"></div>
+            <div class="fc-main">
+              <div class="fc-title">{{ f.title }}{% if f.get('not_configured') %}<span class="nc-tag">non configuré</span>{% endif %}</div>
+              <div class="fc-meta"><span>{{ f.category }}</span><span>· {{ f.ref }}</span></div>
+            </div>
+            <button class="btn-explain" onclick="event.stopPropagation();explainFinding(this,'{{ f.rule_id }}','{{ f.title|replace("'","&#39;") }}','{{ f.remediation|replace("'","&#39;")|replace('"','&quot;') }}')">💬 Expliquer</button>
+            <span class="fc-arrow">▶</span>
+          </div>
+          <div class="fc-body">
+            <div class="fc-detail">{{ f.detail }}</div>
+            <div class="fc-reco">✅ {{ f.remediation }}</div>
+            {% if f.source_gpos %}<div class="fc-sources">GPO source : {% for sg in f.source_gpos %}<span class="fc-gpo-link" onclick="openGPODetail('{{ sg.guid }}')">{{ sg.name }}</span>{% endfor %}</div>{% endif %}
+            {% if f.action_label %}<div style="margin-top:6px;font-size:11px;padding:4px 8px;background:var(--surface2);border-radius:3px;color:var(--txt2)">🔧 {{ f.action_label }}</div>{% endif %}
+            <div class="explain-zone" id="ez-c-{{ f.rule_id }}"></div>
+          </div>
+        </div>
+        {% endfor %}
+        {% if not (data.all_findings | selectattr('severity','eq','critical') | list) %}
+        <div class="empty-state"><div class="es-icon">✅</div><div class="es-title">Aucun problème critique</div></div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- SUB : Alertes -->
+  <div id="sub-security-warnings" style="display:none">
+    <div class="page-header">
+      <h2>🟡 Alertes</h2>
+      <p>{{ data.warnings }} alerte(s) à surveiller</p>
+    </div>
+    <div class="content-area">
+      <div class="toolbar">
+        <div class="search-mini"><span class="si">⌕</span><input type="text" placeholder="Filtrer…" oninput="filterFindingsSub(this.value,'warning')"></div>
+        <select class="gpo-source-select" onchange="filtFByGPO(this.value,'warning')">
+          <option value="">Toutes les GPO</option>
+          {% for gpo in data.gpo_reports %}{% if gpo.findings | selectattr('severity','eq','warning') | list %}<option value="{{ gpo.guid }}">{{ gpo.name }}</option>{% endif %}{% endfor %}
+        </select>
+      </div>
+      <div class="finding-list" id="fl-warning">
+        {% for f in data.all_findings | selectattr('severity','eq','warning') | list %}
+        <div class="finding-card warning" data-sev="warning" data-txt="{{ f.title|lower }} {{ f.category|lower }}" data-guids="{{ (f.source_gpos or [])|map(attribute='guid')|join(',') }}">
+          <div class="fc-head" onclick="togFC(this)">
+            <div class="fc-sev warning"></div>
+            <div class="fc-main">
+              <div class="fc-title">{{ f.title }}{% if f.get('not_configured') %}<span class="nc-tag">non configuré</span>{% endif %}</div>
+              <div class="fc-meta"><span>{{ f.category }}</span><span>· {{ f.ref }}</span></div>
+            </div>
+            <button class="btn-explain" onclick="event.stopPropagation();explainFinding(this,'{{ f.rule_id }}','{{ f.title|replace("'","&#39;") }}','{{ f.remediation|replace("'","&#39;")|replace('"','&quot;') }}')">💬</button>
+            <span class="fc-arrow">▶</span>
+          </div>
+          <div class="fc-body">
+            <div class="fc-detail">{{ f.detail }}</div>
+            <div class="fc-reco">✅ {{ f.remediation }}</div>
+            {% if f.source_gpos %}<div class="fc-sources">GPO source : {% for sg in f.source_gpos %}<span class="fc-gpo-link" onclick="openGPODetail('{{ sg.guid }}')">{{ sg.name }}</span>{% endfor %}</div>{% endif %}
+            <div class="explain-zone" id="ez-w-{{ f.rule_id }}"></div>
+          </div>
         </div>
         {% endfor %}
       </div>
+    </div>
+  </div>
 
-      <!-- Chemin complet -->
-      <div style="font-size:11px;color:var(--txt3);font-family:'JetBrains Mono',monospace;padding:6px 0;border-top:1px solid var(--border)">
-        {{ c.section_label }} → {{ c.key }}
+  <!-- SUB : Conformes -->
+  <div id="sub-security-compliant" style="display:none">
+    <div class="page-header">
+      <h2>✅ Paramètres conformes</h2>
+      <p>Ces règles sont respectées dans votre AD</p>
+    </div>
+    <div class="content-area">
+      <div class="finding-list">
+        {% for r in data.compliant_rules %}
+        <div class="finding-card good">
+          <div class="fc-head" onclick="togFC(this)">
+            <div class="fc-sev good"></div>
+            <div class="fc-main">
+              <div class="fc-title">{{ r.title }}</div>
+              <div class="fc-meta"><span>{{ r.category }}</span><span>· {{ r.ref }}</span></div>
+            </div>
+            <span class="fc-pill good">conforme</span>
+            <span class="fc-arrow">▶</span>
+          </div>
+          <div class="fc-body">
+            <div class="fc-detail">{{ r.remediation }}</div>
+          </div>
+        </div>
+        {% endfor %}
+        {% if not data.compliant_rules %}
+        <div class="empty-state"><div class="es-icon">⚠️</div><div class="es-title">Aucun paramètre conforme détecté</div><div class="es-sub">Montez le SYSVOL pour une analyse complète.</div></div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- SUB : Conflits -->
+  <div id="sub-security-conflicts" style="display:none">
+    <div class="page-header">
+      <h2>⚡ Conflits GPO</h2>
+      <p>Même paramètre configuré différemment dans plusieurs GPO — la GPO de priorité la plus haute gagne</p>
+    </div>
+    <div class="content-area">
+      <div class="info-box">Un conflit = deux GPO définissent la même clé avec des valeurs différentes. La <strong>GPO gagnante</strong> est celle liée à l'OU la plus profonde ou marquée Enforced.</div>
+      <div class="toolbar">
+        <button class="filter-btn on" onclick="filtConflicts('all',this)">Tous ({{ data.conflicts_high + data.conflicts_low }})</button>
+        <button class="filter-btn" onclick="filtConflicts('high',this)">🔴 Sécurité ({{ data.conflicts_high }})</button>
+        <button class="filter-btn" onclick="filtConflicts('low',this)">🟡 Autres ({{ data.conflicts_low }})</button>
+        <div class="search-mini" style="margin-left:auto"><span class="si">⌕</span><input type="text" placeholder="Filtrer…" oninput="searchConflicts(this.value)"></div>
+      </div>
+      {% if data.gpo_conflicts %}
+      {% for c in data.gpo_conflicts %}
+      <div class="conflict-card {% if c.is_security %}high{% else %}low{% endif %}" data-sec="{{ c.is_security|lower }}" data-txt="{{ c.label|lower }}">
+        <div class="cc-head" onclick="togCC(this)">
+          <span style="font-size:11px">{% if c.is_security %}🔴{% else %}🟡{% endif %}</span>
+          <span class="cc-key">{{ c.section_label }} → {{ c.key_short }}</span>
+          <span style="font-size:10px;color:var(--txt3)">{{ c.gpo_count }} GPO</span>
+          <span style="font-size:11px;color:var(--txt3);transition:transform .15s" class="cc-arr">▶</span>
+        </div>
+        <div class="cc-body">
+          <div class="cc-winner">✅ Gagnant : <strong style="cursor:pointer;color:var(--green)" onclick="openGPODetail('{{ c.winner.gpo_guid }}')">{{ c.winner.gpo_name }}</strong> → <code>{{ c.winner.value }}</code>{% if c.winner.enforced %} <span style="color:var(--red);font-size:10px">ENFORCED</span>{% endif %}</div>
+          {% for l in c.losers %}<div class="cc-loser">❌ Écrasé : <strong style="cursor:pointer" onclick="openGPODetail('{{ l.gpo_guid }}')">{{ l.gpo_name }}</strong> → <code>{{ l.value }}</code></div>{% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+      {% else %}
+      <div class="empty-state"><div class="es-icon">✅</div><div class="es-title">Aucun conflit détecté</div></div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- SUB : Orphelines -->
+  <div id="sub-security-orphans" style="display:none">
+    <div class="page-header">
+      <h2>◌ GPO orphelines</h2>
+      <p>Non liées à une OU — inutiles ou dangereuses selon leur contenu</p>
+    </div>
+    <div class="content-area">
+      {% if data.orphan_gpos %}
+      <div class="info-box">Ces GPO existent mais ne s'appliquent sur aucune OU. Vérifiez si elles doivent être supprimées ou liées.</div>
+      {% for name in data.orphan_gpos %}
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px 16px;margin-bottom:6px;display:flex;align-items:center;gap:10px">
+        <span style="color:var(--amber)">◌</span>
+        <span style="font-size:13px;font-weight:500">{{ name }}</span>
+        <span style="font-size:11px;color:var(--txt3);margin-left:auto">Non liée à aucune OU — à supprimer ou archiver</span>
+      </div>
+      {% endfor %}
+      {% else %}
+      <div class="empty-state"><div class="es-icon">✅</div><div class="es-title">Aucune GPO orpheline</div></div>
+      {% endif %}
+    </div>
+  </div>
+
+</div><!-- /tab-security -->
+
+
+<!-- ════════════════════ ONGLET DIAGNOSTIC ════════════════════ -->
+<div class="tab-content" id="tab-diag">
+
+  <!-- SUB : Recherche -->
+  <div id="sub-diag-search">
+    <div class="page-header">
+      <h2>🔍 Diagnostic — Recherche GPO</h2>
+      <p>Cherchez n'importe quoi : imprimante, chemin réseau, paramètre, script, RDS… Les synonymes sont automatiques.</p>
+    </div>
+    <div class="content-area">
+      <div class="search-bar">
+        <span class="search-icon">⌕</span>
+        <input id="search-input" type="text"
+          placeholder="Ex: RDS imprimante · print01 · startup script · SMB · proxy…"
+          oninput="globalSearch(this.value)"
+          onfocus="this.style.boxShadow='0 0 0 3px rgba(74,127,212,.15)'"
+          onblur="this.style.boxShadow=''">
+      </div>
+      <div class="search-hint">💡 Plusieurs mots = ET automatique (RDS + imprimante = GPO qui touchent les deux) · Les synonymes sont inclus (RDS↔Terminal Services, imprimante↔printer…)</div>
+
+      <div class="shortcut-group">
+        <div class="shortcut-label">Raccourcis simples</div>
+        <div class="shortcut-row">
+          <button class="shortcut-btn" onclick="qs('imprimante')">🖨 Imprimantes</button>
+          <button class="shortcut-btn" onclick="qs('lecteur réseau')">💾 Lecteurs réseau</button>
+          <button class="shortcut-btn" onclick="qs('script')">📜 Scripts</button>
+          <button class="shortcut-btn" onclick="qs('tâche planifiée')">⏰ Tâches</button>
+          <button class="shortcut-btn" onclick="qs('service windows')">🔧 Services</button>
+          <button class="shortcut-btn" onclick="qs('registre')">🗝 Registre</button>
+          <button class="shortcut-btn" onclick="qs('groupe local')">👥 Groupes</button>
+        </div>
+      </div>
+      <div class="shortcut-group">
+        <div class="shortcut-label">🔗 Combinaisons diagnostic — GPO touchant plusieurs domaines</div>
+        <div class="shortcut-row">
+          <button class="shortcut-btn combo" onclick="qs('RDS imprimante')">🖥+🖨 RDS &amp; Imprimante</button>
+          <button class="shortcut-btn combo" onclick="qs('imprimante lecteur')">🖨+💾 Imprimante &amp; Lecteur</button>
+          <button class="shortcut-btn combo" onclick="qs('logon script imprimante')">📜+🖨 Script logon &amp; Imprimante</button>
+          <button class="shortcut-btn combo" onclick="qs('startup script lecteur')">📜+💾 Script &amp; Lecteur</button>
+          <button class="shortcut-btn combo" onclick="qs('service registre')">🔧+🗝 Service &amp; Registre</button>
+          <button class="shortcut-btn combo" onclick="qs('proxy internet')">🌐 Proxy &amp; Internet</button>
+        </div>
       </div>
 
-      <!-- Recommandation -->
-      <div class="fc-reco" style="margin-top:8px">
-        {% if c.is_security %}
-        ⚠ Paramètre de sécurité sensible — vérifiez que la valeur appliquée ({{ c.winner.value }}, GPO "{{ c.winner.gpo_name }}") est bien celle souhaitée.
-        Supprimez ce paramètre de la/les GPO perdante(s) pour éliminer l'ambiguïté.
-        {% else %}
-        Vérifiez si la valeur dans la GPO perdante est intentionnelle.
-        Si non, supprimez-la pour éviter toute confusion lors d'une future modification de priorité GPO.
-        {% endif %}
-        {% if c.enforced_wins %}
-        La GPO gagnante est Enforced — elle s'applique en priorité absolue quelle que soit la hiérarchie OU.
-        {% endif %}
+      <div id="search-results-header" style="display:none" class="search-result-header">
+        <span id="sr-count"></span>
+        <span id="sr-gpos"></span>
+        <span id="sr-syn"></span>
+      </div>
+      <div id="search-results"></div>
+
+      <div id="search-empty" class="empty-state">
+        <div class="es-icon">⌕</div>
+        <div class="es-title">Tapez pour chercher</div>
+        <div class="es-sub">
+          Chemin UNC · Lettre de lecteur · Nom de script · Clé de registre<br>
+          Nom de service · Commande · Nom de groupe · Paramètre de sécurité<br>
+          <span style="color:var(--teal)">+ synonymes automatiques</span>
+        </div>
       </div>
     </div>
   </div>
-  {% endfor %}
-  </div>
 
-  {% else %}
-  <div style="text-align:center;padding:60px;color:var(--txt3)">
-    🎉 Aucun conflit GPO détecté — vos GPO sont cohérentes entre elles.
-  </div>
-  {% endif %}
-</div>
-
-<!-- ══ TIMELINE ══ -->
-<div id="view-timeline" class="view">
-  <div class="view-header">
-    <div class="view-title">⏱ Timeline des modifications GPO</div>
-    <div class="view-sub">GPO triées par date de dernière modification — identifiez ce qui a changé récemment</div>
-  </div>
-  <div class="toolbar" style="margin-bottom:16px">
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <span style="font-size:11px;color:var(--txt3)">Période :</span>
-      <button class="filter-btn on" id="tl-btn-all"  onclick="filterTimeline('all',this)">Tout</button>
-      <button class="filter-btn"    id="tl-btn-7"    onclick="filterTimeline(7,this)">7 jours</button>
-      <button class="filter-btn"    id="tl-btn-30"   onclick="filterTimeline(30,this)">30 jours</button>
-      <button class="filter-btn"    id="tl-btn-90"   onclick="filterTimeline(90,this)">90 jours</button>
-      <button class="filter-btn"    id="tl-btn-365"  onclick="filterTimeline(365,this)">1 an</button>
+  <!-- SUB : Toutes les GPO -->
+  <div id="sub-diag-gpolist" style="display:none">
+    <div class="page-header">
+      <h2>≡ Toutes les GPO</h2>
+      <p>Cliquez sur une GPO pour voir tous ses paramètres et ses findings</p>
+    </div>
+    <div class="content-area">
+      <div class="toolbar">
+        <div class="search-mini"><span class="si">⌕</span><input type="text" placeholder="Rechercher une GPO…" oninput="searchGPOList(this.value)"></div>
+        <button class="filter-btn on" onclick="filtGPO('all',this)">Toutes</button>
+        <button class="filter-btn" onclick="filtGPO('issues',this)">Avec problèmes</button>
+        <button class="filter-btn" onclick="filtGPO('wmi',this)">Filtre WMI</button>
+        <button class="filter-btn" onclick="filtGPO('orphan',this)">Orphelines</button>
+      </div>
+      <div class="gpo-grid" id="gpo-list-area"></div>
     </div>
   </div>
-  <div id="timeline-content"></div>
-</div>
 
-<!-- ══ ORPHANS ══ -->
-<div id="view-orphans" class="view">
-  <div class="view-header">
-    <div class="view-title">GPO orphelines & redondances</div>
-    <div class="view-sub">GPO non liées et paramètres définis dans plusieurs GPO</div>
-  </div>
-  {% if data.orphan_gpos %}
-  <div class="stitle">GPO non liées ({{ data.orphan_gpos|length }})</div>
-  {% for name in data.orphan_gpos %}
-  <div class="warn-box"><strong style="color:var(--amber)">◌ {{ name }}</strong> — Non liée à aucune OU. À supprimer ou archiver.</div>
-  {% endfor %}
-  {% endif %}
-  {% if data.redundant_params %}
-  <div class="stitle" style="margin-top:20px">Paramètres définis dans plusieurs GPO</div>
-  {% for key, names in data.redundant_params.items() %}
-  <div class="ou-card">
-    <div class="ou-head" onclick="this.nextElementSibling.classList.toggle('open')">
-      <span style="color:var(--amber)">⚠</span>
-      <span style="flex:1;font-size:12px;font-family:'JetBrains Mono',monospace">{{ key }}</span>
-      <span style="font-size:11px;color:var(--txt3)">{{ names|length }} GPO ▶</span>
+  <!-- SUB : Timeline -->
+  <div id="sub-diag-timeline" style="display:none">
+    <div class="page-header">
+      <h2>⏱ Timeline des modifications</h2>
+      <p>Identifiez ce qui a changé récemment — utile quand un problème est apparu à une date précise</p>
     </div>
-    <div class="ou-body" style="font-size:12px;color:var(--txt2)">{{ names|join(', ') }}</div>
+    <div class="content-area">
+      <div class="toolbar">
+        <button class="filter-btn on" onclick="filterTimeline('all',this)">Tout</button>
+        <button class="filter-btn" onclick="filterTimeline(7,this)">7 jours</button>
+        <button class="filter-btn" onclick="filterTimeline(30,this)">30 jours</button>
+        <button class="filter-btn" onclick="filterTimeline(90,this)">90 jours</button>
+        <button class="filter-btn" onclick="filterTimeline(365,this)">1 an</button>
+      </div>
+      <div id="timeline-content"></div>
+    </div>
   </div>
-  {% endfor %}
-  {% endif %}
-  <div class="stitle" style="margin-top:20px">Commandes utiles</div>
-  <div class="mono-block">
-    <span class="mono-comment"># RSOP complet sur un poste</span><br>
-    gpresult /H C:\rsop.html /F<br><br>
-    <span class="mono-comment"># Vérifier SMBv1</span><br>
-    Get-SmbServerConfiguration | Select EnableSMB1Protocol<br><br>
-    <span class="mono-comment"># Vérifier WDigest</span><br>
-    Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest<br><br>
-    <span class="mono-comment"># Vérifier LocalAccountTokenFilterPolicy</span><br>
-    Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
+
+  <!-- SUB : GPO Détail -->
+  <div id="sub-diag-gpodetail" style="display:none">
+    <div class="gpo-detail-header" id="gpo-detail-header">
+      <!-- rempli par JS -->
+    </div>
+    <div class="content-area">
+      <button class="back-btn" onclick="goBackFromDetail()">← Retour</button>
+      <div id="gpo-detail-body"></div>
+    </div>
   </div>
-</div>
+
+</div><!-- /tab-diag -->
+
+
+<!-- ════════════════════ ONGLET INVENTAIRE ════════════════════ -->
+<div class="tab-content" id="tab-inventory">
+
+  <!-- SUB : Par OU -->
+  <div id="sub-inventory-byou">
+    <div class="page-header">
+      <h2>⊢ Inventaire par OU</h2>
+      <p>Quelles GPO s'appliquent sur quelle OU — dans l'ordre de priorité Windows réel</p>
+    </div>
+    <div class="content-area">
+      <div class="toolbar">
+        <div class="search-mini"><span class="si">⌕</span><input type="text" placeholder="Filtrer par OU…" oninput="searchOU(this.value)"></div>
+      </div>
+      <div id="byou-content"></div>
+    </div>
+  </div>
+
+  <!-- SUB : Par type -->
+  <div id="sub-inventory-bytype" style="display:none">
+    <div class="page-header">
+      <h2>◫ Inventaire par type de configuration</h2>
+      <p>Imprimantes, lecteurs réseau, scripts, tâches… combien de GPO configurent chaque type</p>
+    </div>
+    <div class="content-area">
+      <div id="type-grid-area"></div>
+      <div id="type-detail-area"></div>
+    </div>
+  </div>
+
+</div><!-- /tab-inventory -->
 
 </main>
+</div><!-- /app -->
 
-<!-- Data -->
+<!-- ══ DONNÉES ══════════════════════════════════════════════════════════════ -->
 <script id="gpo-json" type="application/json">{{ data.gpo_reports | tojson }}</script>
-
 <script>
-// ── Init ──────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════════════════
 let _gpos = [];
-const CAT_ICONS={'sécurité':'🔒','imprimantes':'🖨','lecteurs':'💾','raccourcis':'🔗','tâches':'⏰','scripts':'📜','groupes':'👥','vars env':'⚙','services':'🔧','audit avancé':'🔍','registre XML':'📋','fichiers':'📁','reg.machine':'🗝','reg.user':'🗝'};
-
-window.addEventListener('DOMContentLoaded', () => {
-  // Restaurer thème en premier — évite le flash de thème incorrect
-  const saved = localStorage.getItem('gpo-theme') || 'dark';
-  document.documentElement.setAttribute('data-theme', saved);
-
-  try { _gpos = JSON.parse(document.getElementById('gpo-json').textContent); } catch(e){}
-
-  // Rendu immédiat : dashboard uniquement (ce que l'utilisateur voit en premier)
-  renderCharts();
-  renderCatGrid();
-  renderDashPriorities();
-  triggerStagger();
-
-  // Masquer le loader dès que le dashboard est prêt
-  requestAnimationFrame(() => {
-    document.getElementById('loader').classList.add('done');
-    setTimeout(() => {
-      const l = document.getElementById('loader');
-      if (l) l.remove();
-    }, 400);
-  });
-
-  // Différer les rendus lourds — exécutés quand le navigateur est idle
-  const _idle = typeof requestIdleCallback !== 'undefined'
-    ? requestIdleCallback
-    : (fn) => setTimeout(fn, 100);
-
-  _idle(() => {
-    renderPriorities();
-    renderGPOList(_gpos);
-  });
-  _idle(() => {
-    renderByType();
-    renderByOU('');
-    populateCompareSelects();
-  });
-});
-
-function triggerStagger() {
-  const items = document.querySelectorAll('.stagger-item');
-  items.forEach((el, i) => {
-    setTimeout(() => el.classList.add('visible'), 50 + i * 40);
-  });
-}
-
-// ── Theme ──
-function toggleTheme() {
-  const cur = document.documentElement.getAttribute('data-theme');
-  const next = cur === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', next);
-  localStorage.setItem('gpo-theme', next);
-  // Redessiner les charts avec les nouvelles couleurs
-  setTimeout(renderCharts, 100);
-}
-
-// ── Navigation ──
-// Suivi des vues déjà initialisées (évite double-rendu)
-const _viewsReady = new Set(['dashboard']);
-
-function nav(id, el) {
-  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.getElementById('view-' + id).classList.add('active');
-  if (el) el.classList.add('active');
-
-  // Rendu lazy : initialiser la vue seulement à la première visite
-  if (!_viewsReady.has(id)) {
-    _viewsReady.add(id);
-    if (id === 'gpolist')     renderGPOList(_gpos);
-    if (id === 'bytype')      renderByType();
-    if (id === 'byou')        renderByOU('');
-    if (id === 'priorities')  renderPriorities();
-    if (id === 'timeline')    renderTimeline();
-  }
-
-  // Ré-animer les stagger items
-  setTimeout(() => {
-    document.querySelectorAll('#view-' + id + ' .stagger-item').forEach((el, i) => {
-      el.classList.remove('visible');
-      setTimeout(() => el.classList.add('visible'), 30 + i * 35);
-    });
-  }, 50);
-}
-
-// ── Charts ──
-let _charts = {};
-function renderCharts() {
-  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  const gridColor = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)';
-  const tickColor = isDark ? '#7a84a8' : '#5a6285';
-
-  // Donut
-  const dCtx = document.getElementById('chart-donut');
-  if (dCtx) {
-    if (_charts.donut) _charts.donut.destroy();
-    const criticals = parseInt('{{ data.criticals }}');
-    const warnings = parseInt('{{ data.warnings }}');
-    const infos = parseInt('{{ data.infos }}');
-    const compliant = parseInt('{{ data.compliant_count }}');
-    _charts.donut = new Chart(dCtx, {
-      type: 'doughnut',
-      data: {
-        labels: ['Critiques', 'Avertissements', 'Informatifs', 'Conformes'],
-        datasets: [{
-          data: [criticals, warnings, infos, compliant],
-          backgroundColor: [
-            isDark ? '#ff5f5f' : '#d63c3c',
-            isDark ? '#ffaa40' : '#c47a00',
-            isDark ? '#5b9ef9' : '#2460c4',
-            isDark ? '#3dd68c' : '#1a7a50',
-          ],
-          borderWidth: 0,
-          hoverOffset: 6,
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false, cutout: '65%',
-        plugins: {
-          legend: { display: false },
-          tooltip: { callbacks: {
-            label: ctx => ` ${ctx.label} : ${ctx.parsed}`
-          }}
-        }
-      }
-    });
-  }
-
-  // Radar par catégorie
-  const rCtx = document.getElementById('chart-radar');
-  if (rCtx) {
-    if (_charts.radar) _charts.radar.destroy();
-    const cats = {'Mots de passe':0,'Authentification':0,'Audit':0,'UAC':0,'Système':0,'Accès':0};
-    const maxes = {'Mots de passe':6,'Authentification':7,'Audit':7,'UAC':4,'Système':6,'Accès':4};
-    // Calculer les scores par catégorie depuis les findings
-    document.querySelectorAll('.finding-card[data-sev]').forEach(c => {
-      const txt = c.dataset.txt || '';
-      if (txt.includes('mot de passe') || txt.includes('password')) cats['Mots de passe']++;
-      else if (txt.includes('authentif') || txt.includes('ntlm') || txt.includes('ldap') || txt.includes('smb')) cats['Authentification']++;
-      else if (txt.includes('audit') || txt.includes('journal') || txt.includes('log')) cats['Audit']++;
-      else if (txt.includes('uac') || txt.includes('élévation') || txt.includes('token')) cats['UAC']++;
-      else if (txt.includes('système') || txt.includes('service') || txt.includes('pare-feu') || txt.includes('wdigest') || txt.includes('print')) cats['Système']++;
-      else cats['Accès']++;
-    });
-    const labels = Object.keys(cats);
-    const scores = labels.map(l => Math.max(0, Math.round((1 - cats[l] / (maxes[l]||1)) * 100)));
-    _charts.radar = new Chart(rCtx, {
-      type: 'radar',
-      data: {
-        labels,
-        datasets: [{
-          data: scores,
-          backgroundColor: isDark ? 'rgba(91,158,249,0.15)' : 'rgba(36,96,196,0.12)',
-          borderColor: isDark ? '#5b9ef9' : '#2460c4',
-          borderWidth: 2, pointBackgroundColor: isDark ? '#5b9ef9' : '#2460c4',
-          pointRadius: 3,
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        scales: {
-          r: {
-            min: 0, max: 100,
-            grid: { color: gridColor },
-            ticks: { color: tickColor, backdropColor: 'transparent', stepSize: 25, font: { size: 10 } },
-            pointLabels: { color: tickColor, font: { size: 11 } }
-          }
-        },
-        plugins: { legend: { display: false } }
-      }
-    });
-  }
-}
-
-// ── Category grid ──
-function renderCatGrid() {
-  const counts = {};
-  _gpos.forEach(g => (_gpoContentIndex[g.guid]||[]).forEach(s => {
-    const k = s.title.split('—')[0].trim().toLowerCase();
-    counts[k] = (counts[k]||0) + 1;
-  }));
-  const sorted = Object.entries(counts).sort((a,b) => b[1]-a[1]);
-  const max = sorted[0]?.[1] || 1;
-  document.getElementById('cat-grid').innerHTML = sorted.map(([k,v]) => `
-    <div class="cat-card stagger-item" onclick="filtByType('${k}')">
-      <div class="cat-icon">${CAT_ICONS[k]||'📄'}</div>
-      <div class="cat-name">${k.charAt(0).toUpperCase()+k.slice(1)}</div>
-      <div class="cat-count">${v} GPO</div>
-      <div class="cat-bar"><div class="cat-fill" style="width:${Math.round(v/max*100)}%"></div></div>
-    </div>`).join('');
-}
-
-// ── Priorities ──
-function _buildPriorityHTML(max) {
-  const fl = document.getElementById('findings-list');
-  if (!fl) return [];
-  const items = [];
-  let i = 1;
-  ['critical','warning'].forEach(sev => {
-    fl.querySelectorAll(`.finding-card[data-sev="${sev}"]`).forEach(c => {
-      if (max && i > max) return;
-      const t = c.querySelector('.fc-title')?.textContent.replace('non configuré','').trim()||'';
-      const d = c.querySelector('.fc-detail')?.textContent||'';
-      const r = c.querySelector('.fc-reco')?.textContent||'';
-      const ref = c.querySelector('.fc-ref')?.textContent||'';
-      items.push({ i: i++, sev, t, d, r, ref });
-    });
-  });
-  return items;
-}
-
-function renderPriorities() {
-  const items = _buildPriorityHTML(null);
-  document.getElementById('priority-list').innerHTML = items.map(p => `
-    <div class="prio-item stagger-item" onclick="this.classList.toggle('open')">
-      <div class="prio-head">
-        <div class="prio-num ${p.sev}">${p.i}</div>
-        <div style="flex:1">
-          <div class="prio-title">${p.t}</div>
-          <div class="prio-ref">${p.ref}</div>
-        </div>
-        <span class="sev-pill ${p.sev}">${p.sev}</span>
-        <span class="prio-arr">▶</span>
-      </div>
-      <div class="prio-body">
-        <div class="prio-detail">${p.d}</div>
-        <div class="prio-reco">${p.r}</div>
-      </div>
-    </div>`).join('') || '<div style="padding:40px;text-align:center;color:var(--txt3)">Aucune action prioritaire 🎉</div>';
-}
-
-function renderDashPriorities() {
-  const items = _buildPriorityHTML(3);
-  document.getElementById('dash-priorities').innerHTML = items.map(p => `
-    <div class="prio-item stagger-item" onclick="this.classList.toggle('open')">
-      <div class="prio-head">
-        <div class="prio-num ${p.sev}">${p.i}</div>
-        <div style="flex:1"><div class="prio-title">${p.t}</div></div>
-        <span class="sev-pill ${p.sev}">${p.sev}</span>
-        <span class="prio-arr">▶</span>
-      </div>
-      <div class="prio-body">
-        <div class="prio-detail">${p.d}</div>
-        <div class="prio-reco">${p.r}</div>
-      </div>
-    </div>`).join('');
-}
-
-// ── GPO List ──
-let _gpoFilter = 'all', _gpoSearch = '';
-function renderGPOList(gpos) {
-  const el = document.getElementById('gpo-list-area');
-  if (!gpos.length) { el.innerHTML = '<div style="color:var(--txt3);padding:20px">Aucune GPO</div>'; return; }
-  const flagsMap = {'1':'user désact.','2':'ordi. désact.','3':'désactivée'};
-  el.innerHTML = `<table class="gpo-table"><thead><tr>
-    <th>Nom</th><th>Score</th><th>Problèmes</th><th>Liens</th><th>Modifié</th>
-  </tr></thead><tbody>` + gpos.map(g => {
-    const s = g.score ?? 100;
-    const sc = s>=70?'var(--green)':s>=40?'var(--amber)':'var(--red)';
-    const f = flagsMap[String(g.flags)] ? `<span class="flag flag-disabled">${flagsMap[String(g.flags)]}</span>` : '';
-    const o = g.is_orphan ? '<span class="flag flag-orphan">orpheline</span>' : '';
-    const issues = g.findings?.length||0;
-    const issHtml = issues ? `<span style="color:var(--amber)">${issues} problème(s)</span>` : `<span style="color:var(--txt3)">—</span>`;
-    return `<tr onclick="showGPODetail('${g.guid}')">
-      <td><span style="font-weight:500">${g.name}</span>${f}${o}</td>
-      <td><div class="score-bar-wrap">
-        <div class="score-bar"><div class="score-bar-fill" style="width:${s}%;background:${sc}"></div></div>
-        <span class="score-num" style="color:${sc}">${s}</span>
-      </div></td>
-      <td>${issHtml}</td>
-      <td style="color:var(--txt3)">${g.link_count||0}</td>
-      <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--txt3)">${g.changed?g.changed.slice(0,10):'—'}</td>
-    </tr>`;
-  }).join('') + '</tbody></table>';
-}
-
-function filtG(f, btn) {
-  _gpoFilter = f;
-  document.querySelectorAll('#view-gpolist .filter-btn').forEach(b=>b.classList.remove('on'));
-  btn.classList.add('on');
-  applyGPOFilter();
-}
-function searchGPO(q) { _gpoSearch = q.toLowerCase(); applyGPOFilter(); }
-function applyGPOFilter() {
-  let g = _gpos;
-  if (_gpoSearch) g = g.filter(x => x.name.toLowerCase().includes(_gpoSearch));
-  if (_gpoFilter==='issues') g = g.filter(x => x.findings?.length);
-  if (_gpoFilter==='empty') g = g.filter(x => !x.has_content);
-  if (_gpoFilter==='orphan') g = g.filter(x => x.is_orphan);
-  renderGPOList(g);
-}
-
-// ── GPO Detail ──
-function showGPODetail(guid) {
-  const g = _gpos.find(x => x.guid===guid);
-  if (!g) return;
-  nav('gpodetail', null);
-  const flagsMap = {'1':'config. utilisateur désactivée','2':'config. ordinateur désactivée','3':'entièrement désactivée'};
-  let html = `<div class="gpo-detail-card">
-    <h3>${g.name}</h3>
-    <div class="gpo-meta-grid" style="margin-top:8px">
-      <span><span>GUID</span>${g.guid}</span>
-      <span><span>Liens</span>${g.link_count||0}</span>
-      <span><span>Modifié</span>${g.changed?g.changed.slice(0,10):'—'}</span>
-      ${flagsMap[String(g.flags)]?`<span style="color:var(--amber)">${flagsMap[String(g.flags)]}</span>`:''}
-      ${g.is_orphan?'<span style="color:var(--blue)">Non liée à une OU</span>':''}
-    </div>
-  </div>`;
-
-  if (g.findings?.length) {
-    html += `<div class="stitle" style="color:var(--amber)">Problèmes détectés dans cette GPO</div>`;
-    g.findings.forEach(f => {
-      html += `<div class="finding-card"><div class="fc-head" onclick="togFC(this)">
-        <div class="sev-dot ${f.severity}"></div>
-        <div style="flex:1"><div class="fc-title">${f.title}</div></div>
-        <span class="sev-pill ${f.severity}" style="margin-right:8px">${f.severity}</span>
-        <div class="fc-arr">▶</div>
-      </div><div class="fc-body">
-        <div class="fc-detail">${f.detail}</div>
-        <div class="fc-reco">${f.remediation}</div>
-      </div></div>`;
-    });
-  }
-
-  if (g.links?.length) {
-    html += `<div class="stitle">Appliquée sur</div>`;
-    g.links.slice(0, 10).forEach(l => {
-      html += `<div style="font-size:12px;color:var(--txt2);font-family:'JetBrains Mono',monospace;padding:5px 0;border-bottom:1px solid var(--border)">${l.ou}${l.enforced?'<span style="color:var(--amber);margin-left:8px;font-size:10px">ENFORCED</span>':''}</div>`;
-    });
-    if (g.links.length > 10) html += `<div style="font-size:11px;color:var(--txt3);padding:4px 0">... et ${g.links.length-10} autres</div>`;
-  }
-
-  if (g.has_content) {
-    html += `<div class="stitle">Paramètres configurés</div>`;
-    const _gContent = _gpoContentIndex[g.guid] || [];
-    _gContent.forEach(sec => {
-      if (!sec.params?.length) return;
-      html += `<div class="section-block">
-        <div class="section-head" onclick="togSec(this)">
-          <span class="section-icon">${sec.icon||'📄'}</span>
-          <span class="section-title">${sec.title}</span>
-          <span class="section-count">${sec.params.length} param.</span>
-          <span class="section-arr">▶</span>
-        </div>
-        <div class="section-body">
-          <table class="param-table">${sec.params.map(p=>`<tr>
-            <td>${p.label||p.key}</td>
-            <td>
-              <span class="${p.alert?'param-bad':''}">${p.value||''}</span>
-              ${p.hint?`<span style="color:var(--txt3);font-size:11px;margin-left:4px">(${p.hint})</span>`:''}
-              ${p.alert?`<span class="param-alert-badge has-tooltip">${p.alert}<span class="tooltip">${p.alert}</span></span>`:''}
-            </td>
-          </tr>`).join('')}</table>
-        </div>
-      </div>`;
-    });
-  } else {
-    html += `<div style="color:var(--txt3);padding:20px 0;font-size:13px">Aucun paramètre lu depuis le SYSVOL pour cette GPO.</div>`;
-  }
-  document.getElementById('gpo-detail-content').innerHTML = html;
-}
-
-// ── By Type ──
-function filtByType(type) {
-  nav('bytype', document.querySelector('[onclick*=bytype]'));
-  setTimeout(() => {
-    const el = document.querySelector(`[data-type="${type}"]`);
-    if (el) el.scrollIntoView({ behavior:'smooth', block:'start' });
-  }, 150);
-}
-function renderByType() {
-  const types = {};
-  _gpos.forEach(g => (_gpoContentIndex[g.guid]||[]).forEach(sec => {
-    const k = sec.title;
-    if (!types[k]) types[k] = { icon: sec.icon, gpos: [] };
-    types[k].gpos.push(g);
-  }));
-  document.getElementById('bytype-content').innerHTML =
-    Object.entries(types).sort((a,b)=>b[1].gpos.length-a[1].gpos.length).map(([title,{icon,gpos}]) => `
-      <div class="type-section" data-type="${title.split('—')[0].trim().toLowerCase()}">
-        <div class="type-header">
-          <span style="font-size:20px">${icon||'📄'}</span>
-          <span style="font-size:15px;font-weight:600">${title}</span>
-          <span style="font-size:12px;color:var(--txt2);margin-left:auto">${gpos.length} GPO</span>
-        </div>
-        <table class="gpo-table"><thead><tr><th>GPO</th><th>Aperçu</th><th>Modifié</th></tr></thead>
-        <tbody>${gpos.map(g=>{
-          const sec = (_gpoContentIndex[g.guid]||[]).find(s=>s.title===title);
-          const preview = sec?.params?.slice(0,3).map(p=>p.key||p.label).join(', ')||'';
-          return `<tr onclick="showGPODetail('${g.guid}')">
-            <td style="font-weight:500">${g.name}</td>
-            <td style="color:var(--txt2);font-size:12px">${preview}${(sec?.params?.length||0)>3?'…':''}</td>
-            <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--txt3)">${g.changed?g.changed.slice(0,10):'—'}</td>
-          </tr>`;
-        }).join('')}</tbody></table>
-      </div>`).join('') || '<div style="color:var(--txt3);padding:20px">Aucun contenu disponible.</div>';
-}
-
-// ── By OU ──
-function renderByOU(filter) {
-  // OU → liste de GPO dans l'ordre de priorité (index dans _gpos = priorité : dernier = plus haute)
-  const ous = {};
-  _gpos.forEach((g, gpoIdx) => (g.links||[]).forEach(l => {
-    const ou = l.ou || '(racine domaine)';
-    if (filter && !ou.toLowerCase().includes(filter)) return;
-    if (!ous[ou]) ous[ou] = [];
-    ous[ou].push({
-      name: g.name, guid: g.guid, gpoIdx,
-      enforced: l.enforced, disabled: l.disabled,
-      score: g.score, flags: g.flags,
-      changed: g.changed || '',
-      is_disabled: g.is_disabled,
-      disabled_label: g.disabled_label || '',
-    });
-  }));
-
-  // Trier les GPO dans chaque OU : enforced d'abord, puis par ordre de priorité descendant
-  Object.values(ous).forEach(gpoList => {
-    gpoList.sort((a, b) => {
-      if (a.enforced !== b.enforced) return a.enforced ? -1 : 1;
-      return b.gpoIdx - a.gpoIdx; // index plus élevé = priorité plus haute dans Windows
-    });
-    // Annoter avec le rang de priorité
-    let priority = 1;
-    [...gpoList].reverse().forEach(g => { g.priority = priority++; });
-  });
-
-  const _scoreColor = s => s === null ? 'var(--txt3)' : s >= 70 ? 'var(--green)' : s >= 40 ? 'var(--amber)' : 'var(--red)';
-
-  document.getElementById('byou-content').innerHTML =
-    Object.entries(ous).sort((a,b) => b[1].length - a[1].length).map(([ou, gpoList]) => {
-      // Chemin OU lisible
-      const ouParts = ou.split(',').filter(p => p.startsWith('OU=')).map(p => p.slice(3)).reverse();
-      const ouLabel = ouParts.length > 0 ? ouParts.join(' › ') : ou;
-      const ouShort = ouParts.length > 0 ? ouParts[ouParts.length - 1] : ou;
-      const enforced = gpoList.filter(g => g.enforced).length;
-
-      return `
-      <div class="ou-card">
-        <div class="ou-head" onclick="togOU(this)">
-          <span style="color:var(--teal);font-size:12px">⊢</span>
-          <span style="flex:1;font-size:12px;font-family:'JetBrains Mono',monospace" title="${ou}">${ouLabel}</span>
-          <span style="font-size:11px;color:var(--txt3)">
-            ${gpoList.length} GPO${enforced > 0 ? ` · <span style="color:var(--red)">${enforced} enforced</span>` : ''}
-            ▶
-          </span>
-        </div>
-        <div class="ou-body">
-          <div style="font-size:10px;color:var(--txt3);padding:4px 8px 8px;border-bottom:1px solid var(--border);display:flex;gap:16px">
-            <span>Ordre d'application Windows : priorité 1 (basse) → priorité ${gpoList.length} (haute)</span>
-            <span style="color:var(--teal)">↑ = appliqué en dernier = gagne les conflits</span>
-          </div>
-          ${gpoList.map(g => {
-            const scoreColor = _scoreColor(g.score);
-            const scoreBadge = g.is_disabled
-              ? `<span style="font-size:10px;color:var(--txt3);font-style:italic">${g.disabled_label || 'désactivée'}</span>`
-              : g.score !== null
-                ? `<span style="font-size:10px;color:${scoreColor}">Score ${g.score}/100</span>`
-                : '';
-            const changedBadge = g.changed
-              ? `<span style="font-size:10px;color:var(--txt3)">Modif: ${g.changed.slice(0,10)}</span>`
-              : '';
-            const priorityBadge = `<span style="font-size:10px;min-width:70px;color:var(--txt3)">Priorité ${g.priority}</span>`;
-            return `
-            <div class="ou-gpo-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              ${priorityBadge}
-              <span style="color:var(--blue);cursor:pointer;flex:1;font-size:12px" onclick="showGPODetail('${g.guid}')">${g.name}</span>
-              ${scoreBadge}
-              ${changedBadge}
-              ${g.enforced ? '<span class="flag flag-disabled">ENFORCED</span>' : ''}
-              ${g.disabled ? '<span class="flag" style="background:var(--surface3);color:var(--txt2)">lien désactivé</span>' : ''}
-              ${g.is_disabled ? '<span class="flag" style="background:var(--surface3);color:var(--txt3)">GPO désactivée</span>' : ''}
-            </div>`;
-          }).join('')}
-        </div>
-      </div>`;
-    }).join('') || '<div style="color:var(--txt3);padding:20px">Aucune OU trouvée.</div>';
-}
-function searchOU(q) { renderByOU(q.toLowerCase()); }
-
-// ── Timeline ──────────────────────────────────────────────────────────────
-let _tlDays = 'all';
-
-function filterTimeline(days, btn) {
-  _tlDays = days;
-  document.querySelectorAll('#view-timeline .filter-btn').forEach(b => b.classList.remove('on'));
-  btn.classList.add('on');
-  renderTimeline();
-}
-
-function renderTimeline() {
-  const now = new Date();
-  const cutoff = _tlDays === 'all' ? null : new Date(now - _tlDays * 86400000);
-
-  // Préparer les GPO avec une date parsée
-  const withDate = _gpos.map(g => {
-    let d = null;
-    const raw = g.changed || g.created || '';
-    if (raw) {
-      // Formats possibles : "2024-03-01", "20240301120000.0Z" (LDAP), "2024-03-01 12:00:00"
-      try {
-        if (/^\d{14}/.test(raw)) {
-          // Format LDAP : YYYYMMDDHHmmss.0Z
-          const y = raw.slice(0,4), mo = raw.slice(4,6), dy = raw.slice(6,8);
-          d = new Date(`${y}-${mo}-${dy}`);
-        } else {
-          d = new Date(raw.slice(0,10));
-        }
-        if (isNaN(d)) d = null;
-      } catch(e) { d = null; }
-    }
-    return { ...g, _date: d };
-  }).filter(g => g._date && (!cutoff || g._date >= cutoff));
-
-  withDate.sort((a, b) => b._date - a._date);
-
-  if (!withDate.length) {
-    document.getElementById('timeline-content').innerHTML =
-      `<div style="color:var(--txt3);padding:30px;text-align:center">Aucune GPO avec une date de modification dans cette période.</div>`;
-    return;
-  }
-
-  // Grouper par mois
-  const byMonth = {};
-  withDate.forEach(g => {
-    const key = g._date.toLocaleDateString('fr-FR', { year:'numeric', month:'long' });
-    if (!byMonth[key]) byMonth[key] = [];
-    byMonth[key].push(g);
-  });
-
-  const _scoreColor = s => s === null ? 'var(--txt3)' : s >= 70 ? 'var(--green)' : s >= 40 ? 'var(--amber)' : 'var(--red)';
-
-  document.getElementById('timeline-content').innerHTML =
-    Object.entries(byMonth).map(([month, gpos]) => `
-      <div style="margin-bottom:20px">
-        <div style="font-size:12px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.08em;padding:4px 0;border-bottom:1px solid var(--border);margin-bottom:8px">${month} — ${gpos.length} GPO</div>
-        ${gpos.map(g => {
-          const scoreColor = _scoreColor(g.score);
-          const scoreBadge = g.is_disabled
-            ? `<span style="font-size:10px;color:var(--txt3)">${g.disabled_label||'désactivée'}</span>`
-            : g.score !== null
-              ? `<span style="color:${scoreColor};font-size:11px;font-weight:600">Score ${g.score}/100</span>`
-              : '';
-          const ouList = (g.links||[]).map(l => {
-            const ou = (l.ou||'').split(',').filter(p=>p.startsWith('OU=')).map(p=>p.slice(3)).reverse().join(' › ') || l.ou || '(racine)';
-            return `<span style="font-size:10px;color:var(--txt3)">${ou}${l.enforced?' <span style="color:var(--red)">ENFORCED</span>':''}</span>`;
-          }).join(' · ');
-          const critCount = (g.findings||[]).filter(f=>f.severity==='critical').length;
-          return `
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:10px 14px;margin-bottom:6px;display:flex;align-items:flex-start;gap:12px;cursor:pointer"
-               onclick="showGPODetail('${g.guid}')">
-            <div style="min-width:68px;text-align:right">
-              <div style="font-size:11px;font-weight:600;color:var(--txt2)">${g._date.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'})}</div>
-              <div style="font-size:10px;color:var(--txt3)">${g._date.getFullYear()}</div>
-            </div>
-            <div style="flex:1;min-width:0">
-              <div style="font-size:13px;font-weight:500;color:var(--blue);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g.name}</div>
-              <div style="font-size:11px;color:var(--txt3);margin-top:2px">${ouList || 'Non liée'}</div>
-            </div>
-            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-              ${scoreBadge}
-              ${critCount > 0 ? `<span style="background:rgba(255,95,95,.12);color:var(--red);border-radius:3px;padding:1px 6px;font-size:10px">${critCount} critique${critCount>1?'s':''}</span>` : ''}
-              ${g.is_disabled ? '<span style="font-size:10px;color:var(--txt3);border:1px solid var(--border);border-radius:3px;padding:1px 5px">désactivée</span>' : ''}
-            </div>
-          </div>`;
-        }).join('')}
-      </div>`
-    ).join('');
-}
-
-// ── Export findings ───────────────────────────────────────────────────────
-function exportFindings(fmt) {
-  const findings = _findingsData || [];
-  if (!findings.length) { alert('Aucun finding à exporter.'); return; }
-
-  let content, mime, filename;
-
-  if (fmt === 'csv') {
-    const header = 'ID,Sévérité,Catégorie,Titre,Référence,Remédiation';
-    const rows = findings.map(f => [
-      f.rule_id||'', f.severity||'', f.category||'',
-      `"${(f.title||'').replace(/"/g,'""')}"`,
-      `"${(f.ref||'').replace(/"/g,'""')}"`,
-      `"${(f.remediation||'').replace(/"/g,'""')}"`,
-    ].join(','));
-    content = [header, ...rows].join('\n');
-    mime = 'text/csv;charset=utf-8';
-    filename = 'gpoctopus_findings.csv';
-
-  } else {
-    const lines = [
-      '# GPOctopus Audit — Findings de sécurité',
-      `> Généré le ${new Date().toLocaleDateString('fr-FR')} · ${findings.length} constatations`,
-      '',
-    ];
-    const sevOrder = { critical: 0, warning: 1, info: 2 };
-    const sorted = [...findings].sort((a,b) => (sevOrder[a.severity]??9) - (sevOrder[b.severity]??9));
-    const bySev = {};
-    sorted.forEach(f => {
-      if (!bySev[f.severity]) bySev[f.severity] = [];
-      bySev[f.severity].push(f);
-    });
-    const sevLabels = { critical: '🔴 Critiques', warning: '🟡 Avertissements', info: '🔵 Informatifs' };
-    Object.entries(bySev).forEach(([sev, flist]) => {
-      lines.push(`## ${sevLabels[sev]||sev} (${flist.length})`);
-      flist.forEach(f => {
-        lines.push(`\n### ${f.title}`);
-        lines.push(`- **ID** : ${f.rule_id||'—'}`);
-        lines.push(`- **Référence** : ${f.ref||'—'}`);
-        lines.push(`- **Catégorie** : ${f.category||'—'}`);
-        if (f.detail) lines.push(`- **Détail** : ${f.detail}`);
-        lines.push(`- **Remédiation** : ${f.remediation||'—'}`);
-        if (f.source_gpos && f.source_gpos.length > 0) {
-          lines.push(`- **GPO concernée(s)** : ${f.source_gpos.map(g=>g.name).join(', ')}`);
-        }
-      });
-      lines.push('');
-    });
-    content = lines.join('\n');
-    mime = 'text/markdown;charset=utf-8';
-    filename = 'gpoctopus_findings.md';
-  }
-
-  const blob = new Blob(['\uFEFF' + content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-// ── Conflict filters ──
-function filtConflicts(mode, btn) {
-  document.querySelectorAll('#view-conflicts .filter-btn').forEach(b => b.classList.remove('on'));
-  btn.classList.add('on');
-  document.querySelectorAll('.conflict-card').forEach(c => {
-    const isSec = c.dataset.sec === 'true';
-    let show = true;
-    if (mode === 'high') show = isSec;
-    if (mode === 'low')  show = !isSec;
-    c.style.display = show ? '' : 'none';
-  });
-}
-function searchConflicts(q) {
-  q = q.toLowerCase();
-  document.querySelectorAll('.conflict-card[data-txt]').forEach(c => {
-    c.style.display = (!q || c.dataset.txt.includes(q)) ? '' : 'none';
-  });
-}
-
-// ── Compare ──
-function populateCompareSelects() {}
-
-// ── Quick Panel ──
-let _qpSev = 'critical';
-const _findingsData    = {{ data.all_findings | tojson }};
-const _compliantData   = {{ data.compliant_rules | tojson }};
-const _orphanData      = {{ data.orphan_gpos | tojson }};
-const _duplicatesData  = {{ data.true_duplicates | tojson }};
-const _conflictsData   = {{ data.gpo_conflicts | tojson }};
-const _searchIndex     = {{ data.search_index | tojson }};
 const _gpoContentIndex = {{ data.gpo_content_index | tojson }};
+const _searchIndex     = {{ data.search_index | tojson }};
+const _findingsData    = {{ data.all_findings | tojson }};
+const _conflictsData   = {{ data.gpo_conflicts | tojson }};
 
-// Construire search_blob côté client une seule fois
 _searchIndex.forEach(item => {
-  item.search_blob = [item.gpo_name, item.type, item.key, item.value, item.context]
+  item.search_blob = [item.gpo_name,item.type,item.key,item.value,item.context]
     .filter(Boolean).join(' ').toLowerCase();
 });
 
-// ── Table de synonymes sémantiques ──────────────────────────────────────────
-const SYNONYMS = [
-  ['rds',        'terminal', 'remoteapp', 'remotefx', 'mstsc', 'rdp', 'bureau à distance', 'thinprint'],
-  ['terminal',   'rds', 'remoteapp', 'rdp'],
-  ['rdp',        'rds', 'terminal', 'mstsc'],
-  ['imprimante', 'printer', 'print', 'spooler', 'printers', 'thinprint'],
-  ['printer',    'imprimante', 'print', 'spooler'],
-  ['print',      'imprimante', 'printer', 'spooler'],
-  ['lecteur',    'drive', 'drives', 'réseau', 'partage', 'unc'],
-  ['drive',      'lecteur', 'réseau', 'unc'],
-  ['réseau',     'lecteur', 'drive', 'unc', 'partage'],
-  ['script',     'scripts', 'logon', 'startup', 'shutdown', 'logoff', 'ps1', 'bat', 'cmd', 'vbs'],
-  ['logon',      'script', 'ouverture de session'],
-  ['startup',    'script', 'démarrage'],
-  ['smb',        'cifs', 'lanman', 'partage', 'smbv1', 'samba'],
-  ['cifs',       'smb', 'partage'],
-  ['ntlm',       'lm', 'kerberos', 'authentification', 'ntlmv2'],
-  ['kerberos',   'ntlm', 'authentification', 'ticket'],
-  ['firewall',   'pare-feu', 'parefeu'],
-  ['pare-feu',   'firewall', 'parefeu'],
-  ['proxy',      'internet', 'wpad', 'pac', 'ie', 'edge'],
-  ['internet',   'proxy', 'ie', 'wpad'],
-  ['uac',        'lua', 'elevation', 'élévation', 'token'],
-  ['wdigest',    'lsass', 'credential', 'plaintext'],
-  ['lsass',      'wdigest', 'runasppl', 'credential guard'],
-  ['registre',   'registry', 'regedit', 'hklm', 'hkcu', 'hkey'],
-  ['registry',   'registre', 'hklm', 'hkcu'],
-  ['tâche',      'task', 'scheduled', 'planifiée'],
-  ['task',       'tâche', 'planifiée', 'scheduled'],
-  ['service',    'services', 'daemon'],
-  ['groupe',     'group', 'administrators', 'members', 'membre'],
-  ['group',      'groupe', 'administrators'],
-  ['gpo',        'stratégie', 'policy', 'policies'],
-  ['stratégie',  'gpo', 'policy'],
-  ['bitlocker',  'chiffrement', 'encryption', 'tpm'],
-  ['wsus',       'update', 'windows update', 'mise à jour'],
-  ['antivirus',  'defender', 'wdav', 'malware'],
-  ['vpn',        'ipsec', 'tunnel', 'directaccess'],
-];
+window.addEventListener('DOMContentLoaded', () => {
+  const savedTheme = localStorage.getItem('gpo-theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', savedTheme);
 
-const _synonymMap = {};
-SYNONYMS.forEach(([key, ...syns]) => {
-  if (!_synonymMap[key]) _synonymMap[key] = new Set();
-  syns.forEach(s => _synonymMap[key].add(s));
+  try { _gpos = JSON.parse(document.getElementById('gpo-json').textContent); } catch(e){}
+
+  renderCharts();
+
+  requestAnimationFrame(() => {
+    document.getElementById('loader').classList.add('done');
+    setTimeout(() => { const l=document.getElementById('loader'); if(l)l.remove(); }, 400);
+  });
+
+  const idle = typeof requestIdleCallback!=='undefined' ? requestIdleCallback : fn=>setTimeout(fn,100);
+  idle(() => renderGPOList(_gpos));
+  idle(() => { renderByOU(''); renderByType(); });
 });
 
-function _expandTokens(tokens) {
-  const expanded = [];
-  const synonymsUsed = {};
-  tokens.forEach(t => {
-    expanded.push(t);
-    const syns = _synonymMap[t];
-    if (syns && syns.size > 0) {
-      synonymsUsed[t] = [...syns];
-      syns.forEach(s => expanded.push(s));
-    }
+// ══════════════════════════════════════════════════════════════════════
+// NAVIGATION
+// ══════════════════════════════════════════════════════════════════════
+let _currentTab = 'security';
+let _currentSub = { security:'overview', diag:'search', inventory:'byou' };
+let _prevSub = null; // pour le retour depuis GPO détail
+
+function switchTab(tab) {
+  // Désactiver tous les onglets
+  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.main-tab').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.sub-nav').forEach(n=>n.style.display='none');
+
+  document.getElementById('tab-'+tab).classList.add('active');
+  document.getElementById('tab-btn-'+tab).classList.add('active');
+  document.getElementById('subnav-'+tab).style.display='';
+
+  _currentTab = tab;
+  showSub(tab, _currentSub[tab]);
+}
+
+function showSub(tab, sub) {
+  // Cacher toutes les sous-vues du tab
+  const tabEl = document.getElementById('tab-'+tab);
+  tabEl.querySelectorAll('[id^="sub-'+tab+'-"]').forEach(el=>el.style.display='none');
+
+  const el = document.getElementById('sub-'+tab+'-'+sub);
+  if(el) el.style.display='';
+
+  _currentSub[tab] = sub;
+
+  // Mettre à jour la sous-nav
+  document.querySelectorAll('#subnav-'+tab+' .sub-item').forEach(si=>{
+    si.classList.toggle('active', si.getAttribute('onclick') && si.getAttribute('onclick').includes("'"+sub+"'"));
   });
-  return { expandedTokens: expanded, synonymsUsed };
+
+  // Lazy init
+  if(tab==='inventory' && sub==='byou') renderByOU('');
+  if(tab==='inventory' && sub==='bytype') renderByType();
+  if(tab==='diag' && sub==='timeline') renderTimeline();
+  if(tab==='diag' && sub==='gpolist') renderGPOList(_gpos);
 }
 
-// ── Moteur de recherche global ──────────────────────────────────────────────
-let _searchTypeFilter = 'all';
-let _lastQuery = '';
+function openGPODetail(guid) {
+  _prevSub = {tab:_currentTab, sub:_currentSub[_currentTab]};
+  if(_currentTab !== 'diag') switchTab('diag');
+  showSub('diag','gpodetail');
+  renderGPODetail(guid);
+}
 
-function quickSearch(q) {
-  document.getElementById('search-main-input').value = q;
-  const searchView = document.getElementById('view-search');
-  if (searchView && !searchView.classList.contains('active')) {
-    nav('search', document.querySelector('.nav-item[onclick*="\'search\'"]'));
+function goBackFromDetail() {
+  if(_prevSub) {
+    switchTab(_prevSub.tab);
+    showSub(_prevSub.tab, _prevSub.sub);
+    _prevSub = null;
+  } else {
+    showSub('diag','gpolist');
   }
-  globalSearch(q);
 }
 
-function globalSearch(q) {
-  _lastQuery = q;
-  const mainInput = document.getElementById('search-main-input');
-  if (mainInput && document.activeElement !== mainInput && mainInput.value !== q) mainInput.value = q;
+// ══════════════════════════════════════════════════════════════════════
+// THÈME
+// ══════════════════════════════════════════════════════════════════════
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme');
+  const next = cur==='dark'?'light':'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('gpo-theme', next);
+  setTimeout(renderCharts, 100);
+}
 
-  const emptyState  = document.getElementById('search-empty-state');
-  const resultsDiv  = document.getElementById('search-results');
-  const headerDiv   = document.getElementById('search-results-header');
-  const typeFilters = document.getElementById('search-type-filters');
-  const synHint     = document.getElementById('search-synonym-hint');
+// ══════════════════════════════════════════════════════════════════════
+// CHARTS
+// ══════════════════════════════════════════════════════════════════════
+let _charts={};
+function renderCharts(){
+  const isDark = document.documentElement.getAttribute('data-theme')==='dark';
+  const gc = isDark?'rgba(255,255,255,.06)':'rgba(0,0,0,.06)';
+  const tc = isDark?'#7a84a8':'#5a6285';
 
-  const qTrimmed = q.trim();
-  if (!qTrimmed || qTrimmed.length < 2) {
-    emptyState.style.display  = '';
-    resultsDiv.innerHTML      = '';
-    headerDiv.style.display   = 'none';
-    typeFilters.style.display = 'none';
-    _searchTypeFilter = 'all';
+  const dc = document.getElementById('chart-donut');
+  if(dc){
+    if(_charts.donut) _charts.donut.destroy();
+    _charts.donut = new Chart(dc,{
+      type:'doughnut',
+      data:{
+        labels:['Critiques','Alertes','Infos','Conformes'],
+        datasets:[{
+          data:[{{ data.criticals }},{{ data.warnings }},{{ data.infos }},{{ data.compliant_count }}],
+          backgroundColor:[isDark?'#e05252':'#c03030',isDark?'#d4892a':'#a86a10',isDark?'#4a7fd4':'#2655b0',isDark?'#3a9e72':'#1e7a54'],
+          borderWidth:0,hoverOffset:4
+        }]
+      },
+      options:{responsive:true,maintainAspectRatio:false,cutout:'65%',
+        plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.label} : ${c.parsed}`}}}}
+    });
+  }
+
+  const rc = document.getElementById('chart-radar');
+  if(rc){
+    if(_charts.radar) _charts.radar.destroy();
+    const cats={'Mots de passe':0,'Authentif.':0,'Audit':0,'UAC':0,'Système':0,'Accès':0};
+    const maxes={'Mots de passe':6,'Authentif.':7,'Audit':7,'UAC':4,'Système':6,'Accès':4};
+    _findingsData.forEach(f=>{
+      const t=(f.title+' '+f.category).toLowerCase();
+      if(t.includes('passe')||t.includes('password')) cats['Mots de passe']++;
+      else if(t.includes('ntlm')||t.includes('auth')||t.includes('kerberos')||t.includes('smb')) cats['Authentif.']++;
+      else if(t.includes('audit')||t.includes('journal')) cats['Audit']++;
+      else if(t.includes('uac')||t.includes('élév')) cats['UAC']++;
+      else if(t.includes('système')||t.includes('service')||t.includes('pare-feu')||t.includes('wdigest')) cats['Système']++;
+      else cats['Accès']++;
+    });
+    const labels=Object.keys(cats);
+    const scores=labels.map(l=>Math.max(0,Math.round((1-cats[l]/(maxes[l]||1))*100)));
+    _charts.radar = new Chart(rc,{
+      type:'radar',
+      data:{labels,datasets:[{data:scores,backgroundColor:isDark?'rgba(74,127,212,.12)':'rgba(38,85,176,.1)',borderColor:isDark?'#4a7fd4':'#2655b0',borderWidth:2,pointBackgroundColor:isDark?'#4a7fd4':'#2655b0',pointRadius:3}]},
+      options:{responsive:true,maintainAspectRatio:false,
+        scales:{r:{min:0,max:100,grid:{color:gc},ticks:{color:tc,backdropColor:'transparent',stepSize:25,font:{size:10}},pointLabels:{color:tc,font:{size:10}}}},
+        plugins:{legend:{display:false}}}
+    });
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// SYNONYMES & MOTEUR DE RECHERCHE
+// ══════════════════════════════════════════════════════════════════════
+const SYNONYMS=[
+  ['rds','terminal','remoteapp','remotefx','mstsc','rdp','bureau à distance','thinprint'],
+  ['terminal','rds','remoteapp','rdp'],
+  ['rdp','rds','terminal','mstsc'],
+  ['imprimante','printer','print','spooler','printers','thinprint'],
+  ['printer','imprimante','print','spooler'],
+  ['print','imprimante','printer','spooler'],
+  ['lecteur','drive','drives','réseau','partage','unc'],
+  ['drive','lecteur','réseau','unc'],
+  ['réseau','lecteur','drive','unc','partage'],
+  ['script','scripts','logon','startup','shutdown','logoff','ps1','bat','cmd','vbs'],
+  ['logon','script','ouverture de session'],
+  ['startup','script','démarrage'],
+  ['smb','cifs','lanman','partage','smbv1'],
+  ['ntlm','lm','kerberos','authentification','ntlmv2'],
+  ['kerberos','ntlm','authentification','ticket'],
+  ['firewall','pare-feu','parefeu'],
+  ['pare-feu','firewall'],
+  ['proxy','internet','wpad','pac','ie','edge'],
+  ['internet','proxy','ie','wpad'],
+  ['uac','lua','elevation','élévation','token'],
+  ['wdigest','lsass','credential','plaintext'],
+  ['registre','registry','regedit','hklm','hkcu'],
+  ['registry','registre','hklm','hkcu'],
+  ['tâche','task','scheduled','planifiée'],
+  ['task','tâche','planifiée'],
+  ['service','services'],
+  ['groupe','group','administrators','membre'],
+  ['group','groupe','administrators'],
+  ['gpo','stratégie','policy'],
+  ['bitlocker','chiffrement','tpm'],
+  ['wsus','update','windows update'],
+  ['antivirus','defender','wdav'],
+  ['vpn','ipsec','directaccess'],
+];
+const _synMap={};
+SYNONYMS.forEach(([k,...syns])=>{ if(!_synMap[k])_synMap[k]=new Set(); syns.forEach(s=>_synMap[k].add(s)); });
+
+function _expandTokens(tokens){
+  const synsUsed={};
+  tokens.forEach(t=>{ const s=_synMap[t]; if(s&&s.size>0) synsUsed[t]=[...s]; });
+  return synsUsed;
+}
+
+let _lastQ='';
+function qs(q){ document.getElementById('search-input').value=q; globalSearch(q); }
+
+function globalSearch(q){
+  _lastQ=q;
+  const hdr=document.getElementById('search-results-header');
+  const res=document.getElementById('search-results');
+  const empty=document.getElementById('search-empty');
+  const qt=q.trim();
+
+  if(!qt||qt.length<2){
+    hdr.style.display='none'; res.innerHTML=''; empty.style.display='';
     return;
   }
-  emptyState.style.display = 'none';
+  empty.style.display='none';
 
-  const rawTokens = qTrimmed.toLowerCase().split(/\s+/).filter(Boolean);
-  const { synonymsUsed } = _expandTokens(rawTokens);
+  const rawTokens=qt.toLowerCase().split(/\s+/).filter(Boolean);
+  const synsUsed=_expandTokens(rawTokens);
 
-  // Étape 1 : pour chaque entrée, quels tokens originaux sont couverts ?
-  const candidates = _searchIndex.map(item => {
-    const covered = rawTokens.filter(t => {
-      if (item.search_blob.includes(t)) return true;
-      const syns = _synonymMap[t];
-      return syns && [...syns].some(s => item.search_blob.includes(s));
+  // Étape 1 : entrées qui couvrent au moins un token (direct ou synonyme)
+  const candidates=_searchIndex.map(item=>{
+    const covered=rawTokens.filter(t=>{
+      if(item.search_blob.includes(t)) return true;
+      const syns=_synMap[t];
+      return syns&&[...syns].some(s=>item.search_blob.includes(s));
     });
-    return covered.length > 0 ? { ...item, _covered: covered } : null;
+    return covered.length>0?{...item,_covered:covered}:null;
   }).filter(Boolean);
 
-  // Étape 2 : grouper par GPO, récupérer les métadonnées pour le diagnostic
-  const byGpo = {};
-  candidates.forEach(item => {
-    if (!byGpo[item.gpo_guid]) {
-      const gpoMeta = _gpos.find(x => x.guid === item.gpo_guid) || {};
-      byGpo[item.gpo_guid] = {
-        name: item.gpo_name, guid: item.gpo_guid,
-        items: [], covered: new Set(),
-        links: gpoMeta.links || [],
-        score: gpoMeta.score,
-        findings: gpoMeta.findings || [],
-        is_disabled: gpoMeta.is_disabled,
-        disabled_label: gpoMeta.disabled_label || '',
+  // Étape 2 : grouper par GPO
+  const byGpo={};
+  candidates.forEach(item=>{
+    if(!byGpo[item.gpo_guid]){
+      const gMeta=_gpos.find(x=>x.guid===item.gpo_guid)||{};
+      byGpo[item.gpo_guid]={
+        name:item.gpo_name,guid:item.gpo_guid,
+        items:[],covered:new Set(),
+        links:gMeta.links||[],score:gMeta.score,
+        findings:gMeta.findings||[],wmi_filter:gMeta.wmi_filter,
       };
     }
-    item._covered.forEach(t => byGpo[item.gpo_guid].covered.add(t));
+    item._covered.forEach(t=>byGpo[item.gpo_guid].covered.add(t));
     byGpo[item.gpo_guid].items.push(item);
   });
 
   // Étape 3 : garder uniquement les GPO couvrant TOUS les tokens
-  let gpoGroups = Object.values(byGpo).filter(g => rawTokens.every(t => g.covered.has(t)));
+  let groups=Object.values(byGpo).filter(g=>rawTokens.every(t=>g.covered.has(t)));
 
-  // Filtre par type
-  if (_searchTypeFilter !== 'all') {
-    gpoGroups = gpoGroups
-      .map(g => ({ ...g, items: g.items.filter(i => i.type === _searchTypeFilter) }))
-      .filter(g => g.items.length > 0);
-  }
-
-  // Scoring : types distincts × 5 + nombre d'entrées × 2 + bonus enforced
-  gpoGroups.forEach(g => {
-    const types = new Set(g.items.map(i => i.type));
-    g._relevance = g.items.length * 2 + types.size * 5 + (g.links.some(l => l.enforced) ? 3 : 0);
+  // Scoring
+  groups.forEach(g=>{
+    const types=new Set(g.items.map(i=>i.type));
+    g._rel=g.items.length*2+types.size*5+(g.links.some(l=>l.enforced)?3:0);
   });
-  gpoGroups.sort((a, b) => b._relevance - a._relevance);
-
-  // Comptage par type pour les filtres
-  const typeCounts = {};
-  gpoGroups.forEach(g => g.items.forEach(item => {
-    typeCounts[item.type] = (typeCounts[item.type] || 0) + 1;
-  }));
-
-  if (Object.keys(typeCounts).length > 1) {
-    typeFilters.style.display = '';
-    document.getElementById('search-type-btns').innerHTML =
-      Object.entries(typeCounts).sort((a,b) => b[1]-a[1]).map(([type, count]) => {
-        const icon = (_searchIndex.find(i => i.type === type) || {}).type_icon || '📄';
-        const on = _searchTypeFilter === type ? ' on' : '';
-        return `<button class="filter-btn${on}" onclick="setSearchType('${type.replace(/'/g,"\\'")}',this)">${icon} ${type} (${count})</button>`;
-      }).join('');
-  } else {
-    typeFilters.style.display = 'none';
-  }
+  groups.sort((a,b)=>b._rel-a._rel);
 
   // Header
-  const totalItems = gpoGroups.reduce((a, g) => a + g.items.length, 0);
-  headerDiv.style.display = 'flex';
-  const modeHint = rawTokens.length > 1
-    ? `<span style="font-size:11px;color:var(--teal)" title="Chaque mot doit apparaître quelque part dans la GPO">⊕ ET inter-catégories</span>`
-    : '';
-  document.getElementById('search-count').innerHTML = `${totalItems} résultat${totalItems!==1?'s':''}${modeHint}`;
-  document.getElementById('search-gpo-count').textContent = `dans ${gpoGroups.length} GPO`;
+  const total=groups.reduce((a,g)=>a+g.items.length,0);
+  hdr.style.display='flex';
+  document.getElementById('sr-count').textContent=`${total} résultat${total!==1?'s':''}`;
+  document.getElementById('sr-gpos').textContent=`dans ${groups.length} GPO`;
+  const synKeys=Object.keys(synsUsed);
+  const synEl=document.getElementById('sr-syn');
+  synEl.innerHTML=synKeys.length>0?`<span class="syn-badge">🔄 Synonymes : ${synKeys.map(k=>`${k}↔${synsUsed[k].slice(0,2).join(',')}`).join(' · ')}</span>`:'';
 
-  if (synHint) {
-    const synKeys = Object.keys(synonymsUsed);
-    synHint.innerHTML = synKeys.length > 0
-      ? `🔄 Synonymes : ${synKeys.map(k => `<strong>${_escHtml(k)}</strong>→${synonymsUsed[k].slice(0,2).map(s=>`<em>${_escHtml(s)}</em>`).join(',')}`).join(' · ')}`
-      : '';
-  }
-
-  if (!gpoGroups.length) {
-    const hints = rawTokens.map(t => {
-      const syns = _synonymMap[t] ? [..._synonymMap[t]] : [];
-      const n = _searchIndex.filter(i => i.search_blob.includes(t) || syns.some(s => i.search_blob.includes(s))).length;
-      return { t, n };
-    }).filter(x => x.n > 0).sort((a,b) => b.n - a.n);
-    resultsDiv.innerHTML = `
-      <div style="text-align:center;padding:40px;color:var(--txt3)">
-        <div style="font-size:32px;margin-bottom:12px">🔍</div>
-        <div style="font-size:14px">Aucune GPO ne contient "<strong style="color:var(--txt)">${_escHtml(q)}</strong>"</div>
-        ${hints.length > 0 ? `<div style="font-size:12px;margin-top:8px">
-          ${hints.map(h=>`"<strong style="color:var(--blue)">${_escHtml(h.t)}</strong>" seul → ${h.n} résultat${h.n>1?'s':''}`).join(' · ')}<br>
-          <span style="color:var(--amber)">→ Aucune GPO ne contient tous ces termes ensemble.</span>
-        </div>` : ''}
-      </div>`;
+  if(!groups.length){
+    const hints=rawTokens.map(t=>{
+      const syns=_synMap[t]?[..._synMap[t]]:[];
+      const n=_searchIndex.filter(i=>i.search_blob.includes(t)||syns.some(s=>i.search_blob.includes(s))).length;
+      return{t,n};
+    }).filter(x=>x.n>0).sort((a,b)=>b.n-a.n);
+    res.innerHTML=`<div class="empty-state"><div class="es-icon">🔍</div>
+      <div class="es-title">Aucun résultat pour "${_escHtml(qt)}"</div>
+      ${hints.length?`<div class="es-sub">${hints.map(h=>`"<strong>${_escHtml(h.t)}</strong>" seul → ${h.n} résultat${h.n>1?'s':''}`).join(' · ')}<br><span style="color:var(--amber)">Aucune GPO ne contient tous ces termes ensemble</span></div>`:''}</div>`;
     return;
   }
 
-  // ── Rendu des entrées ──
-  const renderRows = (items) => {
-    const allToks = [...rawTokens, ...rawTokens.flatMap(t=>[...(_synonymMap[t]||[])])];
-    const shown = items.slice(0, 25);
-    const more  = items.length - shown.length;
-    const rows  = shown.map(item => `
-      <tr style="cursor:pointer" onclick="showGPODetail('${item.gpo_guid}')">
-        <td style="padding:5px 10px;border-bottom:1px solid var(--border);width:20px;text-align:center;font-size:13px">${item.type_icon}</td>
-        <td style="padding:5px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);white-space:nowrap;width:150px">${_highlight(item.type, allToks)}</td>
-        <td style="padding:5px 10px;border-bottom:1px solid var(--border);font-size:12px;font-weight:500;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.key, allToks)}</td>
-        <td style="padding:5px 10px;border-bottom:1px solid var(--border);font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--txt2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.value, allToks)}</td>
-        <td style="padding:5px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.context, allToks)}</td>
-      </tr>`).join('');
-    const moreRow = more > 0 ? `<tr><td colspan="5" style="padding:4px 10px;font-size:11px;color:var(--txt3);font-style:italic">… ${more} entrée${more>1?'s':''} supplémentaire${more>1?'s':''}</td></tr>` : '';
-    return `<table style="width:100%;border-collapse:collapse"><tbody>${rows}${moreRow}</tbody></table>`;
-  };
+  const allToks=[...rawTokens,...rawTokens.flatMap(t=>[...(_synMap[t]||[])])];
 
-  // ── Bandeau diagnostic par GPO ──
-  const renderDiagnostic = (group) => {
-    const links = group.links || [];
-    const linksHtml = links.length > 0
-      ? links.map(l => {
-          const ouParts = (l.ou||'').split(',').filter(p=>p.startsWith('OU=')).map(p=>p.slice(3)).reverse();
-          const ouLabel = ouParts.join(' › ') || l.ou || '(racine)';
-          const tags = [];
-          if (l.enforced) tags.push(`<span style="background:rgba(255,95,95,.15);color:var(--red);border-radius:3px;padding:0 5px;font-size:10px;font-weight:600">ENFORCED</span>`);
-          if (l.disabled) tags.push(`<span style="background:rgba(122,132,168,.15);color:var(--txt3);border-radius:3px;padding:0 5px;font-size:10px">lien désactivé</span>`);
-          return `<div style="display:flex;align-items:center;gap:5px">
-            <span style="color:var(--txt3);font-size:10px">⊢</span>
-            <span style="font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--txt2)">${_escHtml(ouLabel)}</span>
-            ${tags.join('')}
-          </div>`;
-        }).join('')
-      : `<span style="font-size:10px;color:var(--amber)">⚠ GPO non liée à aucune OU</span>`;
-
-    const score = group.score;
-    const scoreColor = score===null ? 'var(--txt3)' : score>=70 ? 'var(--green)' : score>=40 ? 'var(--amber)' : 'var(--red)';
-    const scoreBadge = group.is_disabled
-      ? `<span style="font-size:10px;color:var(--txt3);border:1px solid var(--border);border-radius:3px;padding:1px 5px">${group.disabled_label||'désactivée'}</span>`
-      : score !== null
-        ? `<span style="color:${scoreColor};font-size:10px;font-weight:600">Score ${score}/100</span>`
-        : '';
-
-    const critCount = (group.findings||[]).filter(f=>f.severity==='critical').length;
-    const critBadge = critCount > 0
-      ? `<span style="background:rgba(255,95,95,.12);color:var(--red);border-radius:3px;padding:1px 5px;font-size:10px">${critCount} critique${critCount>1?'s':''}</span>`
-      : '';
-
-    const types = [...new Set(group.items.map(i => i.type_icon + ' ' + i.type.split('—')[0].trim()))];
-    const typePills = types.slice(0,6).map(t =>
-      `<span style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:1px 5px;font-size:10px;color:var(--txt3)">${t}</span>`
-    ).join('');
-
-    return `<div style="padding:7px 14px;background:var(--surface2);border-top:1px solid var(--border);display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap">
-      <div style="min-width:140px"><div style="font-size:9px;color:var(--txt3);margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em">OU liées</div>${linksHtml}</div>
-      <div><div style="font-size:9px;color:var(--txt3);margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em">Types</div><div style="display:flex;flex-wrap:wrap;gap:3px">${typePills}</div></div>
-      <div style="margin-left:auto;display:flex;gap:5px;align-items:center">${scoreBadge}${critBadge}</div>
-    </div>`;
-  };
-
-  const allToks = [...rawTokens, ...rawTokens.flatMap(t=>[...(_synonymMap[t]||[])])];
-
-  resultsDiv.innerHTML = gpoGroups.map(group => {
-    const bodyHtml = rawTokens.length > 1
-      ? rawTokens.map(t => {
-          const syns = [...(_synonymMap[t]||[])];
-          const tItems = group.items.filter(i => i.search_blob.includes(t) || syns.some(s => i.search_blob.includes(s)));
-          if (!tItems.length) return '';
-          const synNote = syns.length > 0 && tItems.some(i => !i.search_blob.includes(t))
-            ? `<span style="color:var(--txt3);font-style:italic;font-size:10px;margin-left:4px">(via synonymes)</span>` : '';
-          return `<div style="border-top:1px solid var(--border)">
-            <div style="padding:4px 12px;background:var(--surface2);font-size:11px;color:var(--txt3);display:flex;align-items:center;gap:5px">
-              <mark style="background:rgba(91,158,249,.2);color:var(--blue);border-radius:3px;padding:1px 5px;font-weight:600">${_escHtml(t)}</mark>
-              — ${tItems.length} entrée${tItems.length>1?'s':''}${synNote}
-            </div>
-            ${renderRows(tItems)}
-          </div>`;
-        }).join('')
-      : `<div style="border-top:1px solid var(--border)">${renderRows(group.items)}</div>`;
-
-    const coveredBadges = rawTokens.map(t =>
-      `<span style="background:rgba(45,212,191,.12);color:var(--teal);border-radius:3px;padding:1px 5px;font-size:10px">✓ ${_escHtml(t)}</span>`
-    ).join('');
-
-    return `
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:3px;margin-bottom:10px;overflow:hidden">
-        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface2);cursor:pointer;border-bottom:1px solid var(--border)"
-             onclick="showGPODetail('${group.guid}')">
-          <span style="font-size:14px">📄</span>
-          <span style="font-size:13px;font-weight:600;flex:1">${_highlight(group.name, allToks)}</span>
-          <div style="display:flex;gap:4px">${coveredBadges}</div>
-          <span style="font-size:11px;color:var(--txt3)">${group.items.length} entrée${group.items.length>1?'s':''}</span>
-          <span style="font-size:11px;color:var(--blue)">Ouvrir →</span>
-        </div>
-        ${renderDiagnostic(group)}
-        ${bodyHtml}
+  res.innerHTML=groups.map(group=>{
+    // Bandeau OU diagnostic
+    const linksHtml=(group.links||[]).slice(0,4).map(l=>{
+      const parts=(l.ou||'').split(',').filter(p=>p.trim().startsWith('OU=')).map(p=>p.slice(3)).reverse();
+      const label=parts.join(' › ')||l.ou||'(racine)';
+      return `<div class="diag-ou-row">
+        <span style="color:var(--txt3)">⊢</span>
+        <span>${_escHtml(label)}</span>
+        ${l.enforced?'<span style="color:var(--red);font-size:10px;font-weight:700">ENFORCED</span>':''}
       </div>`;
+    }).join('');
+
+    const scoreColor=(group.score||0)>=70?'var(--green)':(group.score||0)>=40?'var(--amber)':'var(--red)';
+    const critCount=(group.findings||[]).filter(f=>f.severity==='critical').length;
+
+    const covBadges=rawTokens.map(t=>`<span class="covered-badge">✓ ${_escHtml(t)}</span>`).join('');
+
+    // Regrouper les entrées par token
+    const bodyHtml=rawTokens.length>1
+      ?rawTokens.map(t=>{
+        const syns=[...(_synMap[t]||[])];
+        const tItems=group.items.filter(i=>i.search_blob.includes(t)||syns.some(s=>i.search_blob.includes(s)));
+        if(!tItems.length)return'';
+        const viaS=syns.length>0&&tItems.some(i=>!i.search_blob.includes(t));
+        return`<div style="border-top:1px solid var(--border)">
+          <div style="padding:5px 12px;background:var(--surface2);font-size:11px;color:var(--txt3);display:flex;align-items:center;gap:6px">
+            <mark style="padding:1px 6px;border-radius:3px;font-weight:600">${_escHtml(t)}</mark>
+            — ${tItems.length} entrée${tItems.length>1?'s':''}
+            ${viaS?'<span style="color:var(--txt3);font-style:italic;font-size:10px">(via synonymes)</span>':''}
+          </div>
+          ${_renderResultRows(tItems,allToks,group.guid)}
+        </div>`;
+      }).join('')
+      :`<div style="border-top:1px solid var(--border)">${_renderResultRows(group.items,allToks,group.guid)}</div>`;
+
+    return`<div class="result-gpo">
+      <div class="result-gpo-head" onclick="openGPODetail('${group.guid}')">
+        <span style="font-size:14px">📄</span>
+        <span class="result-gpo-name">${_highlight(group.name,allToks)}</span>
+        <div class="covered-badges">${covBadges}</div>
+        <span style="font-size:11px;color:var(--txt3)">${group.items.length} entrée${group.items.length>1?'s':''}</span>
+        ${group.wmi_filter?'<span class="badge wmi" style="font-size:10px">⚙ WMI</span>':''}
+        <span style="font-size:11px;color:var(--blue);flex-shrink:0">Ouvrir →</span>
+      </div>
+      <div class="diag-banner">
+        <div class="diag-section">
+          <div class="diag-label">OU liées</div>
+          ${linksHtml||'<span style="font-size:10px;color:var(--amber)">Non liée</span>'}
+        </div>
+        <div class="diag-section" style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          ${group.score!=null?`<span style="font-size:11px;font-weight:600;color:${scoreColor}">Score ${group.score}/100</span>`:''}
+          ${critCount>0?`<span class="badge score-bad">${critCount} critique${critCount>1?'s':''}</span>`:''}
+        </div>
+      </div>
+      ${bodyHtml}
+    </div>`;
   }).join('');
 }
 
-function setSearchType(type, btn) {
-  _searchTypeFilter = type;
-  document.querySelectorAll('#search-type-btns .filter-btn').forEach(b => b.classList.remove('on'));
-  document.querySelector('#search-type-filters .filter-btn').classList.remove('on');
+function _renderResultRows(items,allToks,guid){
+  const shown=items.slice(0,20);
+  const more=items.length-shown.length;
+  const rows=shown.map(item=>`
+    <tr onclick="openGPODetail('${guid}')">
+      <td style="width:20px;text-align:center;padding:5px 8px">${item.type_icon}</td>
+      <td class="rt-type">${_highlight(item.type,allToks)}</td>
+      <td class="rt-key">${_highlight(item.key,allToks)}</td>
+      <td class="rt-val">${_highlight(item.value,allToks)}</td>
+      <td class="rt-ctx">${_highlight(item.context,allToks)}</td>
+    </tr>`).join('');
+  const moreRow=more>0?`<tr><td colspan="5" style="padding:4px 12px;font-size:11px;color:var(--txt3);font-style:italic">… ${more} entrée${more>1?'s':''} supplémentaire${more>1?'s':''}</td></tr>`:'';
+  return`<table class="result-table"><tbody>${rows}${moreRow}</tbody></table>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// GPO LISTE
+// ══════════════════════════════════════════════════════════════════════
+let _gpoFilter='all', _gpoSearch='';
+
+function filtGPO(f,btn){
+  _gpoFilter=f;
+  document.querySelectorAll('#sub-diag-gpolist .filter-btn').forEach(b=>b.classList.remove('on'));
   btn.classList.add('on');
-  globalSearch(_lastQuery);
+  renderGPOList(_gpos);
+}
+function searchGPOList(q){ _gpoSearch=q.toLowerCase(); renderGPOList(_gpos); }
+
+function renderGPOList(gpos){
+  let g=[...gpos];
+  if(_gpoSearch) g=g.filter(x=>x.name.toLowerCase().includes(_gpoSearch));
+  if(_gpoFilter==='issues') g=g.filter(x=>x.findings?.length>0);
+  if(_gpoFilter==='wmi') g=g.filter(x=>x.wmi_filter);
+  if(_gpoFilter==='orphan') g=g.filter(x=>x.is_orphan);
+  g.sort((a,b)=>(a.score||100)-(b.score||100));
+
+  const area=document.getElementById('gpo-list-area');
+  if(!area) return;
+
+  area.innerHTML=g.map(gpo=>{
+    const sc=gpo.score??100;
+    const scClass=sc>=70?'score-good':sc>=40?'score-mid':'score-bad';
+    const flg=parseInt(gpo.flags||0);
+    const links=(gpo.links||[]);
+    const ouList=links.slice(0,3).map(l=>{
+      const parts=(l.ou||'').split(',').filter(p=>p.startsWith('OU=')).map(p=>p.slice(3)).reverse();
+      return parts.join(' › ')||l.ou||'(racine)';
+    }).join(', ')+(links.length>3?` +${links.length-3}`:'');
+
+    const critCount=(gpo.findings||[]).filter(f=>f.severity==='critical').length;
+    const warnCount=(gpo.findings||[]).filter(f=>f.severity==='warning').length;
+
+    return`<div class="gpo-card" data-guid="${gpo.guid}" data-issues="${(gpo.findings||[]).length}" data-orphan="${gpo.is_orphan}" data-wmi="${!!gpo.wmi_filter}">
+      <div class="gpo-card-head" onclick="openGPODetail('${gpo.guid}')">
+        <div class="gpo-name" title="${_escHtml(gpo.name)}">${_escHtml(gpo.name)}</div>
+        <div class="gpo-badges">
+          ${!gpo.is_orphan?`<span class="badge ${scClass}">Score ${sc}</span>`:''}
+          ${critCount>0?`<span class="badge score-bad">🔴 ${critCount}</span>`:''}
+          ${warnCount>0?`<span class="badge score-mid">🟡 ${warnCount}</span>`:''}
+          ${flg===3?'<span class="badge disabled">désactivée</span>':flg===1?'<span class="badge disabled">PC off</span>':flg===2?'<span class="badge disabled">User off</span>':''}
+          ${gpo.is_orphan?'<span class="badge orphan">orpheline</span>':''}
+          ${gpo.wmi_filter?'<span class="badge wmi">WMI</span>':''}
+          ${links.some(l=>l.enforced)?'<span class="badge enforced">ENFORCED</span>':''}
+        </div>
+      </div>
+      ${ouList?`<div style="padding:4px 16px 10px;font-size:11px;color:var(--txt3);font-family:'JetBrains Mono',monospace">⊢ ${_escHtml(ouList)}</div>`:''}
+    </div>`;
+  }).join('')||'<div class="empty-state"><div class="es-icon">🔍</div><div class="es-title">Aucune GPO correspondante</div></div>';
 }
 
-function filtSearchType(type, btn) {
-  _searchTypeFilter = type;
-  document.querySelectorAll('#search-type-filters .filter-btn').forEach(b => b.classList.remove('on'));
+// ══════════════════════════════════════════════════════════════════════
+// GPO DÉTAIL
+// ══════════════════════════════════════════════════════════════════════
+const ATTACK_EXAMPLES={
+  'SYS-001':{attack:'Mimikatz → <code>sekurlsa::logonpasswords</code> extrait les mots de passe en clair depuis lsass',tool:'Mimikatz, ProcDump',impact:'Extraction des credentials de toutes les sessions actives'},
+  'SYS-002':{attack:'EternalBlue/WannaCry : exécution de code à distance sans authentification via SMBv1',tool:'EternalBlue, Metasploit',impact:'Compromission en masse, ransomware'},
+  'AUTH-002':{attack:'Capture NTLMv1 avec Responder, crack GPU en quelques heures',tool:'Responder, Hashcat',impact:'Credential theft, mouvement latéral'},
+  'UAC-001':{attack:'Bypass UAC via token manipulation, élévation silencieuse sans prompt utilisateur',tool:'Bypass UAC techniques',impact:'Escalade privilèges sans interaction'},
+  'PWD-001':{attack:'Brute-force / dictionnaire, mots de passe courts crackés en minutes',tool:'Hashcat, John the Ripper',impact:'Compromission comptes, accès non autorisé'},
+  'PRIV-R001':{attack:'SeDebugPrivilege → injection dans lsass, dump de tous les credentials',tool:'Mimikatz',impact:'Extraction credentials de tous les utilisateurs connectés'},
+  'PRIV-R005':{attack:'Driver malveillant en Ring 0 → contournement complet EDR/AV',tool:'KDU, BYOVD',impact:'Contrôle total du noyau'},
+  'AUTH-001':{attack:'Rainbow tables DES sur moitiés de hash LM — cassé en secondes',tool:'Ophcrack, L0phtCrack',impact:'Tous mots de passe < 15 caractères récupérables instantanément'},
+  'REGXML-001':{attack:'Pass-the-Hash via C$/ADMIN$ sur tous les postes du domaine',tool:'CrackMapExec, Impacket',impact:'Mouvement latéral trivial sur tout le parc'},
+};
+
+function renderGPODetail(guid){
+  const g=_gpos.find(x=>x.guid===guid);
+  if(!g) return;
+
+  const flg=parseInt(g.flags||0);
+  const flagLabel={'1':'Config. ordinateur désactivée','2':'Config. utilisateur désactivée','3':'Entièrement désactivée'}[String(flg)]||'';
+  const sc=g.score??100;
+  const scColor=sc>=70?'var(--green)':sc>=40?'var(--amber)':'var(--red)';
+
+  // Header
+  const hdr=document.getElementById('gpo-detail-header');
+  hdr.innerHTML=`
+    <h2>${_escHtml(g.name)}</h2>
+    <div class="gpo-detail-meta">
+      <div class="gdm-item"><span class="gdm-l">GUID</span><span class="gdm-v" style="font-size:10px">${g.guid}</span></div>
+      <div class="gdm-item"><span class="gdm-l">Modifié</span><span class="gdm-v">${g.changed?g.changed.slice(0,10):'—'}</span></div>
+      <div class="gdm-item"><span class="gdm-l">Créé</span><span class="gdm-v">${g.created?g.created.slice(0,10):'—'}</span></div>
+      ${sc!==null?`<div class="gdm-item"><span class="gdm-l">Score</span><span class="gdm-v" style="color:${scColor};font-weight:700">${sc}/100</span></div>`:''}
+      ${flagLabel?`<div class="gdm-item"><span class="gdm-l">Statut</span><span class="gdm-v" style="color:var(--amber)">${flagLabel}</span></div>`:''}
+      ${g.is_orphan?`<div class="gdm-item"><span class="gdm-l">Liens</span><span class="gdm-v" style="color:var(--blue)">Orpheline</span></div>`:''}
+    </div>
+    ${g.wmi_filter?`<div class="wmi-alert" style="margin:12px 0 0">
+      <div class="wmi-alert-title">⚙ Filtre WMI actif — ne s'applique pas sur toutes les machines</div>
+      <div style="font-size:11px;color:var(--txt2)"><strong>Nom :</strong> ${_escHtml(g.wmi_filter.name||'')}${g.wmi_filter.description?` — ${_escHtml(g.wmi_filter.description)}`:''}</div>
+      <div class="wmi-query">${_escHtml(g.wmi_filter.query||'')}</div>
+      <div style="font-size:10px;color:var(--amber);margin-top:4px">Si la GPO ne s'applique pas sur un poste, testez : <code>Get-WmiObject -Query "..."</code></div>
+    </div>`:''}`;
+
+  let body='';
+
+  // Findings de cette GPO
+  if(g.findings?.length){
+    body+=`<div class="section-title" style="color:var(--amber)">⚑ Problèmes détectés dans cette GPO <span class="st-count">${g.findings.length}</span></div>`;
+    body+=`<div class="finding-list">`;
+    g.findings.forEach(f=>{
+      body+=`<div class="finding-card ${f.severity}">
+        <div class="fc-head" onclick="togFC(this)">
+          <div class="fc-sev ${f.severity}"></div>
+          <div class="fc-main">
+            <div class="fc-title">${_escHtml(f.title)}</div>
+            <div class="fc-meta"><span>${f.category||''}</span></div>
+          </div>
+          <button class="btn-explain" onclick="event.stopPropagation();explainFinding(this,'${f.rule_id||''}','${(f.title||'').replace(/'/g,"&#39;")}','${(f.remediation||'').replace(/'/g,"&#39;")}')">💬</button>
+          <span class="fc-pill ${f.severity}">${f.severity}</span>
+          <span class="fc-arrow">▶</span>
+        </div>
+        <div class="fc-body">
+          <div class="fc-detail">${_escHtml(f.detail||'')}</div>
+          <div class="fc-reco">✅ ${_escHtml(f.remediation||'')}</div>
+          <div class="explain-zone" id="ez-d-${f.rule_id}"></div>
+        </div>
+      </div>`;
+    });
+    body+=`</div>`;
+  }
+
+  // Liens OU
+  if(g.links?.length){
+    body+=`<div class="section-title">⊢ Appliquée sur <span class="st-count">${g.links.length} OU</span></div>`;
+    body+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">`;
+    g.links.forEach((l,i)=>{
+      const parts=(l.ou||'').split(',').filter(p=>p.trim().startsWith('OU=')).map(p=>p.slice(3)).reverse();
+      const label=parts.join(' › ')||l.ou||'(racine)';
+      body+=`<div class="ou-gpo-row">
+        <span class="ou-priority">Priorité ${i+1}</span>
+        <span class="ou-name">${_escHtml(label)}</span>
+        ${l.enforced?'<span class="badge enforced">ENFORCED</span>':''}
+        ${l.disabled?'<span class="badge disabled">lien désactivé</span>':''}
+      </div>`;
+    });
+    body+=`</div>`;
+  }
+
+  // Paramètres
+  if(g.has_content){
+    body+=`<div class="section-title">Paramètres configurés</div>`;
+    const secs=_gpoContentIndex[g.guid]||[];
+    secs.forEach(sec=>{
+      if(!sec.params?.length) return;
+      body+=`<div class="param-section">
+        <div class="ps-head" onclick="togPS(this)">
+          <span class="ps-icon">${sec.icon||'📄'}</span>
+          <span class="ps-title">${sec.title}</span>
+          <span class="ps-count">${sec.params.length} param.</span>
+          <span class="ps-arr">▶</span>
+        </div>
+        <div class="ps-body">`;
+      sec.params.forEach(p=>{
+        body+=`<div class="param-row">
+          <span class="param-key">${_escHtml(p.label||p.key)}</span>
+          <span class="param-val${p.alert?' bad':''}">${_escHtml(String(p.value||''))}</span>
+          ${p.hint?`<span class="param-hint">(${_escHtml(p.hint)})</span>`:''}
+        </div>`;
+      });
+      body+=`</div></div>`;
+    });
+  } else {
+    body+=`<div style="color:var(--txt3);padding:20px 0;font-size:13px;text-align:center">Aucun paramètre lu depuis le SYSVOL pour cette GPO.</div>`;
+  }
+
+  document.getElementById('gpo-detail-body').innerHTML=body;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// EXPLIQUER UN FINDING
+// ══════════════════════════════════════════════════════════════════════
+function explainFinding(btn,ruleId,title,remediation){
+  const fcBody=btn.closest('.fc-head')?.nextElementSibling;
+  if(!fcBody?.classList.contains('fc-body')){
+    // Ouvrir le fc-body d'abord
+    togFC(btn.closest('.fc-head'));
+  }
+  const zone=fcBody?.querySelector('.explain-zone');
+  if(!zone) return;
+  if(zone.dataset.loaded==='1'){
+    zone.classList.toggle('open');
+    return;
+  }
+  const ex=ATTACK_EXAMPLES[ruleId];
+  zone.dataset.loaded='1';
+  zone.classList.add('open');
+  zone.innerHTML=`
+    <div style="font-size:11px;font-weight:600;color:var(--teal);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">💬 Contexte d'attaque</div>
+    ${ex?`
+      <div class="explain-attack">${ex.attack}</div>
+      <div class="explain-chips">
+        <span class="explain-chip tool">🛠 ${ex.tool}</span>
+        <span class="explain-chip impact">💥 ${ex.impact}</span>
+      </div>
+    `:`<div class="explain-attack" style="color:var(--txt2)">${_escHtml(title)}</div>`}
+    <div style="font-size:11px;color:var(--green)">✅ ${_escHtml(remediation)}</div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// FILTRES FINDINGS
+// ══════════════════════════════════════════════════════════════════════
+function filterFindingsSub(q,sev){
+  q=q.toLowerCase();
+  const listId='fl-'+(sev==='critical'?'critical':'warning');
+  document.querySelectorAll(`#${listId} .finding-card`).forEach(c=>{
+    const txt=c.dataset.txt||'';
+    c.style.display=(!q||txt.includes(q))?'':'none';
+  });
+}
+function filtFByGPO(guid,sev){
+  const listId='fl-'+(sev==='critical'?'critical':'warning');
+  document.querySelectorAll(`#${listId} .finding-card`).forEach(c=>{
+    const guids=(c.dataset.guids||'').split(',');
+    c.style.display=(!guid||guids.includes(guid))?'':'none';
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// INVENTAIRE PAR OU
+// ══════════════════════════════════════════════════════════════════════
+let _ouFilter='';
+function searchOU(q){ _ouFilter=q.toLowerCase(); renderByOU(_ouFilter); }
+
+function _ouDepth(dn){ return(dn.match(/\bOU=/gi)||[]).length; }
+
+function renderByOU(filter){
+  const ous={};
+  _gpos.forEach((g,gi)=>(g.links||[]).forEach(l=>{
+    const ou=l.ou||'(racine domaine)';
+    if(filter&&!ou.toLowerCase().includes(filter))return;
+    if(!ous[ou])ous[ou]=[];
+    ous[ou].push({...g,_gpoIdx:gi,_enforced:l.enforced,_disabled:l.disabled});
+  }));
+
+  Object.values(ous).forEach(gpoList=>{
+    gpoList.sort((a,b)=>{ if(a._enforced!==b._enforced)return a._enforced?1:-1; return b._gpoIdx-a._gpoIdx; });
+    gpoList.forEach((g,i)=>{ g._priority=i+1; });
+  });
+
+  const _sc=s=>s==null?'var(--txt3)':s>=70?'var(--green)':s>=40?'var(--amber)':'var(--red)';
+
+  const el=document.getElementById('byou-content');
+  if(!el) return;
+  el.innerHTML=Object.entries(ous).sort((a,b)=>b[1].length-a[1].length).map(([ou,gpoList])=>{
+    const parts=ou.split(',').filter(p=>p.trim().startsWith('OU=')).map(p=>p.slice(3)).reverse();
+    const label=parts.length?parts.join(' › '):ou;
+    const enf=gpoList.filter(g=>g._enforced).length;
+    return`<div class="ou-card">
+      <div class="ou-card-head" onclick="this.nextElementSibling.classList.toggle('open')">
+        <span style="color:var(--teal);font-size:13px">⊢</span>
+        <span class="ou-path" title="${_escHtml(ou)}">${_escHtml(label)}</span>
+        <span style="font-size:11px;color:var(--txt3)">${gpoList.length} GPO${enf>0?` · <span style="color:var(--red)">${enf} ENFORCED</span>`:''} ▶</span>
+      </div>
+      <div class="ou-card-body">
+        <div style="font-size:10px;color:var(--txt3);padding:6px 16px;background:var(--surface2);border-bottom:1px solid var(--border)">
+          Ordre Windows : Priorité 1 (basse) → Priorité ${gpoList.length} (haute — gagne les conflits)
+        </div>
+        ${gpoList.map(g=>`
+          <div class="ou-gpo-row">
+            <span class="ou-priority">P${g._priority}</span>
+            <span class="ou-gpo-name" onclick="openGPODetail('${g.guid}')">${_escHtml(g.name)}</span>
+            ${g.score!=null?`<span class="ou-score" style="color:${_sc(g.score)}">${g.score}/100</span>`:''}
+            ${g.changed?`<span class="ou-changed">${g.changed.slice(0,10)}</span>`:''}
+            ${g._enforced?'<span class="badge enforced">ENFORCED</span>':''}
+            ${g._disabled?'<span class="badge disabled">lien off</span>':''}
+            ${parseInt(g.flags||0)===3?'<span class="badge disabled">GPO off</span>':''}
+            ${g.wmi_filter?'<span class="badge wmi">WMI</span>':''}
+          </div>`).join('')}
+      </div>
+    </div>`;
+  }).join('')||'<div class="empty-state"><div class="es-icon">⊢</div><div class="es-title">Aucune OU trouvée</div></div>';
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// INVENTAIRE PAR TYPE
+// ══════════════════════════════════════════════════════════════════════
+function renderByType(){
+  const counts={};
+  _gpos.forEach(g=>(_gpoContentIndex[g.guid]||[]).forEach(s=>{
+    const k=s.title.split('—')[0].trim();
+    if(!counts[k])counts[k]={icon:s.icon,count:0};
+    counts[k].count++;
+  }));
+  const sorted=Object.entries(counts).sort((a,b)=>b[1].count-a[1].count);
+  const max=sorted[0]?.[1].count||1;
+
+  const gridEl=document.getElementById('type-grid-area');
+  if(!gridEl)return;
+  gridEl.innerHTML=`<div class="type-grid">${sorted.map(([k,v])=>`
+    <div class="type-card" onclick="showTypeDetail('${_escHtml(k)}')">
+      <div class="tc-icon">${v.icon||'📄'}</div>
+      <div class="tc-name">${k.charAt(0).toUpperCase()+k.slice(1)}</div>
+      <div class="tc-count">${v.count} GPO</div>
+      <div class="tc-bar"><div class="tc-fill" style="width:${Math.round(v.count/max*100)}%"></div></div>
+    </div>`).join('')}</div>`;
+}
+
+function showTypeDetail(type){
+  const detail=document.getElementById('type-detail-area');
+  if(!detail)return;
+  const matching=_gpos.filter(g=>(_gpoContentIndex[g.guid]||[]).some(s=>s.title.split('—')[0].trim()===type));
+  detail.innerHTML=`
+    <div class="section-title">${type} <span class="st-count">${matching.length} GPO</span></div>
+    <div class="gpo-grid">${matching.map(g=>`
+      <div class="gpo-card" onclick="openGPODetail('${g.guid}')">
+        <div class="gpo-card-head">
+          <span class="gpo-name">${_escHtml(g.name)}</span>
+          ${g.score!=null?`<span class="badge ${g.score>=70?'score-good':g.score>=40?'score-mid':'score-bad'}">${g.score}/100</span>`:''}
+        </div>
+      </div>`).join('')}</div>`;
+  detail.scrollIntoView({behavior:'smooth'});
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// TIMELINE
+// ══════════════════════════════════════════════════════════════════════
+let _tlDays='all';
+function filterTimeline(days,btn){
+  _tlDays=days;
+  document.querySelectorAll('#sub-diag-timeline .filter-btn').forEach(b=>b.classList.remove('on'));
   btn.classList.add('on');
-  globalSearch(_lastQuery);
+  renderTimeline();
 }
 
-function _escHtml(s) {
-  return String(s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+function renderTimeline(){
+  const now=new Date();
+  const cutoff=_tlDays==='all'?null:new Date(now-_tlDays*86400000);
+  const _parseDate=raw=>{
+    if(!raw)return null;
+    try{
+      if(/^\d{14}/.test(raw))return new Date(`${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}`);
+      return new Date(raw.slice(0,10));
+    }catch{return null;}
+  };
+  const withDate=_gpos.map(g=>({...g,_date:_parseDate(g.changed||g.created)}))
+    .filter(g=>g._date&&!isNaN(g._date)&&(!cutoff||g._date>=cutoff));
+  withDate.sort((a,b)=>b._date-a._date);
+
+  const el=document.getElementById('timeline-content');
+  if(!el)return;
+  if(!withDate.length){
+    el.innerHTML='<div class="empty-state"><div class="es-icon">⏱</div><div class="es-title">Aucune GPO avec date de modification dans cette période</div></div>';
+    return;
+  }
+  const byMonth={};
+  withDate.forEach(g=>{
+    const k=g._date.toLocaleDateString('fr-FR',{year:'numeric',month:'long'});
+    if(!byMonth[k])byMonth[k]=[];
+    byMonth[k].push(g);
+  });
+  const _sc=s=>s==null?'var(--txt3)':s>=70?'var(--green)':s>=40?'var(--amber)':'var(--red)';
+  el.innerHTML=Object.entries(byMonth).map(([month,gpos])=>`
+    <div class="tl-month">
+      <div class="tl-month-label">${month} <span style="font-weight:400">— ${gpos.length} GPO</span></div>
+      ${gpos.map(g=>{
+        const ouStr=(g.links||[]).slice(0,2).map(l=>{
+          const parts=(l.ou||'').split(',').filter(p=>p.startsWith('OU=')).map(p=>p.slice(3)).reverse();
+          return parts.join(' › ')||l.ou||'(racine)';
+        }).join(', ')+(g.links?.length>2?` +${g.links.length-2}`:'');
+        const critCount=(g.findings||[]).filter(f=>f.severity==='critical').length;
+        return`<div class="tl-item" onclick="openGPODetail('${g.guid}')">
+          <div class="tl-date">
+            <div class="day">${g._date.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'})}</div>
+            <div class="yr">${g._date.getFullYear()}</div>
+          </div>
+          <div class="tl-info">
+            <div class="tl-name">${_escHtml(g.name)}</div>
+            <div class="tl-ous">${ouStr||'Non liée'}</div>
+          </div>
+          <div class="tl-badges">
+            ${g.score!=null?`<span class="badge" style="color:${_sc(g.score)}">${g.score}/100</span>`:''}
+            ${critCount>0?`<span class="badge score-bad">${critCount} critique${critCount>1?'s':''}</span>`:''}
+            ${g.wmi_filter?'<span class="badge wmi">WMI</span>':''}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`).join('');
 }
 
-function _highlight(text, tokens) {
-  if (!text) return '';
-  let s = _escHtml(String(text));
-  tokens.forEach(t => {
-    if (!t) return;
-    const re = new RegExp(`(${t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`, 'gi');
-    s = s.replace(re, '<mark style="background:rgba(91,158,249,.3);color:var(--txt);border-radius:2px;padding:0 1px">$1</mark>');
+// ══════════════════════════════════════════════════════════════════════
+// CONFLITS
+// ══════════════════════════════════════════════════════════════════════
+function filtConflicts(mode,btn){
+  document.querySelectorAll('#sub-security-conflicts .filter-btn').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  document.querySelectorAll('.conflict-card').forEach(c=>{
+    const isSec=c.dataset.sec==='true';
+    c.style.display=(mode==='all'||(mode==='high'&&isSec)||(mode==='low'&&!isSec))?'':'none';
+  });
+}
+function searchConflicts(q){
+  q=q.toLowerCase();
+  document.querySelectorAll('.conflict-card[data-txt]').forEach(c=>{
+    c.style.display=(!q||c.dataset.txt.includes(q))?'':'none';
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// EXPORT
+// ══════════════════════════════════════════════════════════════════════
+function exportFindings(fmt){
+  if(!_findingsData?.length){alert('Aucun finding à exporter.');return;}
+  let content,mime,filename;
+  if(fmt==='csv'){
+    const h='ID,Sévérité,Catégorie,Titre,Référence,Remédiation';
+    const rows=_findingsData.map(f=>[f.rule_id||'',f.severity||'',f.category||'',
+      `"${(f.title||'').replace(/"/g,'""')}"`,`"${(f.ref||'').replace(/"/g,'""')}"`,
+      `"${(f.remediation||'').replace(/"/g,'""')}"`].join(','));
+    content=[h,...rows].join('\n');mime='text/csv;charset=utf-8';filename='gpoctopus_findings.csv';
+  } else {
+    const lines=['# GPOctopus — Findings de sécurité',`> ${new Date().toLocaleDateString('fr-FR')} · ${_findingsData.length} constatations`,''];
+    const sevOrd={critical:0,warning:1,info:2};
+    const sorted=[..._findingsData].sort((a,b)=>(sevOrd[a.severity]??9)-(sevOrd[b.severity]??9));
+    const bySev={};sorted.forEach(f=>{if(!bySev[f.severity])bySev[f.severity]=[];bySev[f.severity].push(f);});
+    const sevL={critical:'🔴 Critiques',warning:'🟡 Alertes',info:'🔵 Infos'};
+    Object.entries(bySev).forEach(([sev,flist])=>{
+      lines.push(`## ${sevL[sev]||sev} (${flist.length})`);
+      flist.forEach(f=>{
+        lines.push(`\n### ${f.title}`);
+        lines.push(`- **ID** : ${f.rule_id||'—'} · **Réf** : ${f.ref||'—'}`);
+        if(f.detail)lines.push(`- **Détail** : ${f.detail}`);
+        lines.push(`- **Remédiation** : ${f.remediation||'—'}`);
+        if(f.source_gpos?.length)lines.push(`- **GPO** : ${f.source_gpos.map(g=>g.name).join(', ')}`);
+      });lines.push('');
+    });
+    content=lines.join('\n');mime='text/markdown;charset=utf-8';filename='gpoctopus_findings.md';
+  }
+  const blob=new Blob(['\uFEFF'+content],{type:mime});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=filename;a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// UTILITAIRES
+// ══════════════════════════════════════════════════════════════════════
+function togFC(hdr){
+  const b=hdr.nextElementSibling;
+  if(b)b.classList.toggle('open');
+  const a=hdr.querySelector('.fc-arrow');
+  if(a)a.classList.toggle('open');
+}
+function togPS(hdr){
+  const b=hdr.nextElementSibling;
+  if(b)b.classList.toggle('open');
+  const a=hdr.querySelector('.ps-arr');
+  if(a)a.classList.toggle('open');
+}
+function togCC(hdr){
+  const b=hdr.nextElementSibling;
+  if(b)b.classList.toggle('open');
+  const a=hdr.querySelector('.cc-arr');
+  if(a)a.style.transform=b.classList.contains('open')?'rotate(90deg)':'';
+}
+
+function _escHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function _highlight(text,tokens){
+  if(!text)return'';
+  let s=_escHtml(String(text));
+  tokens.forEach(t=>{
+    if(!t)return;
+    const re=new RegExp(`(${t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`, 'gi');
+    s=s.replace(re,'<mark>$1</mark>');
   });
   return s;
 }
-
-function openQuickPanel(mode) {
-  _qpSev = mode;
-  const panel   = document.getElementById('quick-panel');
-  const titleEl = document.getElementById('qp-title');
-  const cnt     = document.getElementById('qp-content');
-
-  // Fermer si on reclique sur le même
-  if (panel.style.display === 'block' && panel.dataset.mode === mode) {
-    panel.style.display = 'none';
-    panel.dataset.mode = '';
-    return;
-  }
-  panel.dataset.mode = mode;
-
-  const labels = {
-    critical:  '🔴 Problèmes critiques',
-    warning:   '🟡 Avertissements',
-    info:      '🔵 Informatifs',
-    compliant: '✅ Contrôles conformes',
-    orphan:    '◌ GPO orphelines',
-    all:       '📋 Toutes les GPO + doublons',
-  };
-  titleEl.textContent = labels[mode] || mode;
-
-  // ── Findings (critical / warning / info) ──
-  if (['critical', 'warning', 'info'].includes(mode)) {
-    const findings = _findingsData.filter(f => f.severity === mode);
-    if (!findings.length) {
-      cnt.innerHTML = '<div style="padding:24px;text-align:center;color:var(--txt3)">Aucune constatation de ce niveau 🎉</div>';
-    } else {
-      cnt.innerHTML = findings.map((f, i) => {
-        const sourceGpos = f.source_gpos || [];
-        const actionType = f.action_type || 'create';
-        const actionLabel = f.action_label || 'Créer une nouvelle GPO';
-        const gpoChips = sourceGpos.map(g =>
-          `<span class="qp-gpo-chip" onclick="showGPODetail('${g.guid}')">${g.name}</span>`
-        ).join('');
-        return `<div class="qp-finding" id="qpf-${mode}-${i}">
-          <div class="qp-finding-head">
-            <div class="sev-dot ${f.severity}" style="margin-top:4px;flex-shrink:0"></div>
-            <div style="flex:1">
-              <div class="qp-title">${f.title}</div>
-              <div style="font-size:10px;color:var(--txt3);font-family:'JetBrains Mono',monospace;margin-top:2px">${f.ref}</div>
-            </div>
-            <span class="qp-finding-toggle" onclick="document.getElementById('qpf-${mode}-${i}').classList.toggle('open')">▶</span>
-          </div>
-          ${actionType === 'modify' ? `
-            <div class="qp-action modify">✏ ${actionLabel}</div>
-            ${gpoChips ? `<div class="qp-gpo-list">${gpoChips}</div>` : ''}
-          ` : `
-            <div class="qp-action create">＋ ${actionLabel}</div>
-            <div style="font-size:11px;color:var(--txt3);margin-top:4px">Ce paramètre n'est pas encore configuré dans vos GPO — créez une GPO dédiée</div>
-          `}
-          <div class="qp-reco">${f.remediation}</div>
-        </div>`;
-      }).join('');
-    }
-  }
-
-  // ── Conformes ──
-  else if (mode === 'compliant') {
-    if (!_compliantData.length) {
-      cnt.innerHTML = '<div style="padding:24px;text-align:center;color:var(--txt3)">Aucun contrôle conforme détecté</div>';
-    } else {
-      cnt.innerHTML = _compliantData.map(r => `
-        <div class="qp-finding">
-          <div class="qp-finding-head">
-            <div class="sev-dot" style="background:var(--green);margin-top:4px;flex-shrink:0"></div>
-            <div style="flex:1">
-              <div class="qp-title">${r.title}</div>
-              <div style="font-size:10px;color:var(--txt3);font-family:'JetBrains Mono',monospace;margin-top:2px">${r.ref} · ${r.category}</div>
-            </div>
-            <span style="font-size:11px;padding:2px 8px;border-radius:2px;background:var(--green-dim);color:var(--green)">✓ OK</span>
-          </div>
-        </div>`).join('');
-    }
-  }
-
-  // ── Orphelines ──
-  else if (mode === 'orphan') {
-    if (!_orphanData.length) {
-      cnt.innerHTML = '<div style="padding:24px;text-align:center;color:var(--txt3)">Aucune GPO orpheline 🎉</div>';
-    } else {
-      cnt.innerHTML = `
-        <div style="padding:10px 18px;background:var(--amber-dim);border-bottom:1px solid var(--border);font-size:12px;color:var(--amber)">
-          Ces GPO ne sont liées à aucune OU — elles ne s'appliquent à personne. À supprimer ou archiver.
-        </div>` +
-        _orphanData.map(name => `
-        <div class="qp-finding" style="display:flex;align-items:center;gap:12px">
-          <span style="color:var(--amber)">◌</span>
-          <span style="flex:1;font-size:13px;font-weight:500">${name}</span>
-          <span style="font-size:11px;color:var(--txt3)">Non liée</span>
-        </div>`).join('');
-    }
-  }
-
-  // ── Toutes les GPO + doublons ──
-  else if (mode === 'all') {
-    const dupHtml = _duplicatesData.length ? `
-      <div style="padding:12px 18px;background:var(--amber-dim);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
-        <span style="font-size:16px">⚠</span>
-        <div>
-          <div style="font-size:13px;font-weight:600;color:var(--amber)">${_duplicatesData.length} paramètre(s) redondants détectés</div>
-          <div style="font-size:12px;color:var(--txt2);margin-top:1px">Même paramètre, même valeur dans 2+ GPO — peut être simplifié</div>
-        </div>
-      </div>` +
-      _duplicatesData.slice(0, 25).map((d, i) => {
-        const chips = d.gpos.map(n => {
-          const g = _gpos.find(x => x.name === n);
-          return `<span class="qp-gpo-chip" ${g ? `onclick="showGPODetail('${g.guid}')" title="Ouvrir ${n}"` : ''}>${n}</span>`;
-        }).join('');
-        return `<div class="qp-finding" id="qpd-${i}">
-          <div class="qp-finding-head" onclick="document.getElementById('qpd-${i}').classList.toggle('open')" style="cursor:pointer">
-            <div style="width:28px;height:28px;border-radius:50%;background:var(--amber-dim);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--amber);flex-shrink:0">${d.gpos.length}</div>
-            <div style="flex:1;min-width:0">
-              <div style="font-size:12px;font-weight:500;font-family:'JetBrains Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.key}</div>
-              <div style="font-size:11px;color:var(--txt3);margin-top:1px">valeur : ${d.value} · ${d.section}</div>
-            </div>
-            <span class="qp-finding-toggle">▶</span>
-          </div>
-          <div class="qp-reco">
-            <div style="font-size:12px;color:var(--txt2);margin-bottom:8px">Présent dans <strong style="color:var(--txt)">${d.gpos.length} GPO</strong> avec la même valeur :</div>
-            <div class="qp-gpo-list">${chips}</div>
-            <div style="margin-top:10px;padding:7px 10px;background:var(--amber-dim);border-radius:6px;font-size:12px;color:var(--amber)">
-              → Conserver dans la GPO de priorité la plus haute, supprimer des autres.
-            </div>
-          </div>
-        </div>`;
-      }).join('') +
-      (_duplicatesData.length > 25 ? `<div style="padding:10px 18px;font-size:12px;color:var(--txt3)">... et ${_duplicatesData.length - 25} autres doublons</div>` : '')
-    : '<div style="padding:12px 18px;background:var(--green-dim);border-bottom:1px solid var(--border);font-size:12px;color:var(--green)">✓ Aucun paramètre redondant détecté</div>';
-
-    const gpoListHtml = _gpos.slice(0, 30).map(g => {
-      const s = g.score ?? 100;
-      const sc = s>=70?'var(--green)':s>=40?'var(--amber)':'var(--red)';
-      const issues = g.findings?.length || 0;
-      return `<div class="qp-finding" style="display:flex;align-items:center;gap:12px;cursor:pointer" onclick="showGPODetail('${g.guid}')">
-        <span style="font-size:12px;color:${sc};font-family:'JetBrains Mono',monospace;min-width:28px">${s}</span>
-        <span style="flex:1;font-size:13px;font-weight:500">${g.name}</span>
-        ${issues ? `<span style="font-size:11px;color:var(--amber)">${issues} pb</span>` : ''}
-        ${g.is_orphan ? '<span class="flag flag-orphan">orpheline</span>' : ''}
-      </div>`;
-    }).join('') + (_gpos.length > 30 ? `<div style="padding:10px 18px;font-size:12px;color:var(--txt3)">... et ${_gpos.length - 30} autres GPO</div>` : '');
-
-    cnt.innerHTML = dupHtml + `<div style="padding:10px 18px;font-size:11px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.5px;border-top:1px solid var(--border)">Toutes les GPO (${_gpos.length})</div>` + gpoListHtml;
-  }
-
-  panel.style.display = 'block';
-}
-
-// ── Filters ──
-function filtF(sev, btn) {
-  document.querySelectorAll('#view-findings .filter-btn').forEach(b=>b.classList.remove('on'));
-  btn.classList.add('on');
-  document.querySelectorAll('.finding-card[data-sev]').forEach(c => {
-    c.style.display = (sev==='all' || c.dataset.sev===sev) ? '' : 'none';
-  });
-}
-function searchFindings(q) {
-  q = q.toLowerCase();
-  document.querySelectorAll('.finding-card[data-txt]').forEach(c => {
-    c.style.display = (!q || c.dataset.txt.includes(q)) ? '' : 'none';
-  });
-}
-
-// ── Toggle helpers ──
-function togFC(hdr) {
-  const b = hdr.nextElementSibling, a = hdr.querySelector('.fc-arr');
-  b.classList.toggle('open'); a.classList.toggle('open');
-}
-function togSec(hdr) {
-  const b = hdr.nextElementSibling, a = hdr.querySelector('.section-arr');
-  b.classList.toggle('open'); a.classList.toggle('open');
-}
-function togOU(hdr) { hdr.nextElementSibling.classList.toggle('open'); }
 </script>
 </body>
 </html>
