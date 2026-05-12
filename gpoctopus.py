@@ -239,7 +239,7 @@ AUDIT_RULES = [
         "severity": "warning",
         "ref": "CIS 17.5.1 · ANSSI R-09",
         "category": "Audit",
-        "check_key": "auditlogonEvents",       # nom exact dans GptTmpl.inf
+        "check_key": "auditlogonevents",        # tout en minuscules comme parse_gpttmpl() retourne
         "section": "event_audit",
         "threshold": 0,
         "operator": "eq",
@@ -408,6 +408,43 @@ AUDIT_RULES = [
         "reg_expected": 1,
         "remediation": "Activer via GPO Device Guard. Requis : UEFI, Secure Boot, TPM 2.0, Win10/11 64-bit.",
     },
+    # ── Kerberos ──
+    {
+        "id": "KRB-001",
+        "title": "Durée de vie des tickets Kerberos trop longue (> 10h)",
+        "severity": "warning",
+        "ref": "CIS 2.3.9.1 · ANSSI R-06",
+        "category": "Kerberos",
+        "check_key": "maxtickerage",
+        "section": "kerberos_policy",
+        "threshold": 10,
+        "operator": "gt",
+        "remediation": "MaxTicketAge ≤ 10h. Un ticket long-lived donne plus de temps à un attaquant pour l'exploiter (Pass-the-Ticket).",
+    },
+    {
+        "id": "KRB-002",
+        "title": "Tolérance d'horloge Kerberos trop élevée (> 5 min)",
+        "severity": "warning",
+        "ref": "CIS 2.3.9.3 · ANSSI R-06",
+        "category": "Kerberos",
+        "check_key": "maxclockskew",
+        "section": "kerberos_policy",
+        "threshold": 5,
+        "operator": "gt",
+        "remediation": "MaxClockSkew ≤ 5 minutes. Une tolérance excessive facilite les attaques par replay de tickets.",
+    },
+    {
+        "id": "KRB-003",
+        "title": "Renouvellement des tickets Kerberos trop long (> 7 jours)",
+        "severity": "info",
+        "ref": "CIS 2.3.9.2 · ANSSI R-06",
+        "category": "Kerberos",
+        "check_key": "maxrenewage",
+        "section": "kerberos_policy",
+        "threshold": 7,
+        "operator": "gt",
+        "remediation": "MaxRenewAge ≤ 7 jours. Limite la durée pendant laquelle un ticket volé peut être renouvelé.",
+    },
 ]
 
 # ─── Règles sur les [Registry Values] du GptTmpl.inf ────────────────────────
@@ -512,13 +549,14 @@ AUDIT_RULES_REGVAL = [
     # ── LSASS protection ──
     {
         "id": "LSA-001",
-        "title": "Protection LSASS (RunAsPPL) non activée",
+        "title": "Protection LSASS (RunAsPPL) non activée ou insuffisante",
         "severity": "warning",
         "ref": "MS KB3033929 · ANSSI R-08",
         "category": "Services & Composants système",
         "regval_key": "machine\\system\\currentcontrolset\\control\\lsa\\runasppl",
-        "bad_val": "4,0",
-        "remediation": "RunAsPPL = 1. Protège lsass.exe comme processus protégé — Mimikatz ne peut plus lire les credentials en mémoire même avec les droits admin locaux. Requis : Secure Boot activé.",
+        "bad_val": "4,1",
+        "operator": "ne",
+        "remediation": "RunAsPPL = 1 (REG_DWORD). Protège lsass.exe comme processus protégé — Mimikatz ne peut plus lire les credentials en mémoire même avec les droits admin locaux. Requis : Secure Boot activé.",
     },
 
     # ── Mots de passe complémentaires ──
@@ -1388,7 +1426,7 @@ def detect_gpo_conflicts(gpos: list) -> list:
         })
 
     for gpo in gpos:
-        if gpo.get('flags') == '3':   # GPO entièrement désactivée
+        if is_gpo_fully_disabled(gpo):   # GPO entièrement désactivée
             continue
 
         # ── GptTmpl.inf (settings) ──
@@ -1493,6 +1531,18 @@ def detect_gpo_conflicts(gpos: list) -> list:
     # Trier : sécurité d'abord, puis nombre de GPO en conflit
     conflicts.sort(key=lambda c: (0 if c['is_security'] else 1, -c['gpo_count']))
     return conflicts[:100]   # cap à 100 pour ne pas exploser le JSON
+
+
+def _enrich_gpos_for_search(gpos: list, gpo_reports: list) -> list:
+    """Injecte les findings calculés dans chaque GPO pour qu'ils soient indexés dans la recherche."""
+    report_by_guid = {r['guid']: r for r in gpo_reports}
+    for gpo in gpos:
+        report = report_by_guid.get(gpo['guid'], {})
+        gpo['_findings_preview'] = [
+            {'title': f['title'], 'severity': f['severity'], 'category': f.get('category', '')}
+            for f in report.get('findings', [])
+        ]
+    return gpos
 
 
 def build_search_index(gpos: list) -> list:
@@ -1724,8 +1774,36 @@ def build_search_index(gpos: list) -> list:
                  f"{'ENFORCED' if link.get('enforced') else 'Normal'}"
                  f"{' | Lien désactivé' if link.get('disabled') else ''}")
 
+        # ── Findings de sécurité (pour pouvoir chercher "WDigest", "NTLMv1"…) ──
+        for f in gpo.get('_findings_preview', []):
+            _add(gpo, 'Constatation sécurité', '🔒',
+                 f.get('title', ''),
+                 f.get('severity', ''),
+                 f.get('category', ''))
+
     return index
 
+
+def _gpo_flags(gpo: dict) -> int:
+    """Retourne les flags d'une GPO comme entier. 0=actif, 1=computer disabled, 2=user disabled, 3=tout désactivé."""
+    try:
+        return int(gpo.get('flags', 0))
+    except (ValueError, TypeError):
+        return 0
+
+def is_gpo_fully_disabled(gpo: dict) -> bool:
+    """Retourne True si la GPO est entièrement désactivée (flags=3)."""
+    return _gpo_flags(gpo) == 3
+
+def is_gpo_computer_disabled(gpo: dict) -> bool:
+    """Retourne True si la partie Computer de la GPO est désactivée (flags=1 ou flags=3)."""
+    f = _gpo_flags(gpo)
+    return f in (1, 3)
+
+def is_gpo_user_disabled(gpo: dict) -> bool:
+    """Retourne True si la partie User de la GPO est désactivée (flags=2 ou flags=3)."""
+    f = _gpo_flags(gpo)
+    return f in (2, 3)
 
 def build_rsop(gpos: list) -> tuple[dict, list]:
     """
@@ -1738,23 +1816,38 @@ def build_rsop(gpos: list) -> tuple[dict, list]:
     rsop_registry_xml = {}   # Registry.xml : (hive\key_lower, name_lower) -> int/str
 
     for gpo in gpos:
-        # Ignorer les GPO désactivées ou orphelines
-        if gpo.get('flags') == '3':  # All settings disabled
+        # Ignorer les GPO entièrement désactivées
+        if is_gpo_fully_disabled(gpo):
             continue
 
-        # Fusionner les settings (dernier gagne = priorité la plus haute)
-        for section, params in gpo.get('settings', {}).items():
-            if section not in rsop_settings:
-                rsop_settings[section] = {}
-            for k, v in params.items():
-                rsop_settings[section][k] = v
+        # Ignorer les paramètres Computer si Computer disabled
+        skip_computer = is_gpo_computer_disabled(gpo)
+        # Ignorer les paramètres User si User disabled
+        skip_user = is_gpo_user_disabled(gpo)
 
-        # Fusionner les entrées registre (Registry.pol binaire)
-        for (key, vname, rtype, val) in gpo.get('registry_entries', []):
-            rsop_registry[(key, vname)] = val
+        # Fusionner les settings (dernier gagne = priorité la plus haute)
+        # GptTmpl.inf = paramètres Computer — ignorer si computer disabled
+        if not skip_computer:
+            for section, params in gpo.get('settings', {}).items():
+                if section not in rsop_settings:
+                    rsop_settings[section] = {}
+                for k, v in params.items():
+                    rsop_settings[section][k] = v
+
+        # Registry.pol Machine — Computer
+        if not skip_computer:
+            for (key, vname, rtype, val) in gpo.get('registry_entries', []):
+                rsop_registry[(key, vname)] = val
+
+        # Registry.pol User
+        if not skip_user:
+            for (key, vname, rtype, val) in gpo.get('registry_entries_user', []):
+                rsop_registry[(key, vname)] = val
 
         # Fusionner les préférences registre XML (Registry.xml)
-        for scope in ('registry_xml_machine', 'registry_xml_user'):
+        for scope, skip in [('registry_xml_machine', skip_computer), ('registry_xml_user', skip_user)]:
+            if skip:
+                continue
             for entry in gpo.get(scope, []):
                 # Normaliser la clé : HKEY_LOCAL_MACHINE\key\name
                 hive = entry.get('hive', '').upper().replace('HKEY_LOCAL_MACHINE', 'HKLM').replace('HKEY_CURRENT_USER', 'HKCU')
@@ -2306,7 +2399,11 @@ class GPOCollector:
             return []
         try:
             files = self._smb.listPath(self._sysvol_share, rel_path + '\\*')
-            return [f for f in files if f.get_longname() not in ('..', '.', '')]
+            return [
+                f for f in files
+                if f.get_longname() not in ('..', '.', '')
+                and not f.is_directory()
+            ]
         except Exception:
             return []
 
@@ -2847,7 +2944,7 @@ def analyze_gpos(gpos: list) -> dict:
 
         # Chercher dans les settings des GPO
         for gpo in gpos:
-            if gpo.get('flags') == '3':
+            if is_gpo_fully_disabled(gpo):
                 continue
             gpo_has_param = False
             # Vérifier dans registry_values (GptTmpl.inf)
@@ -2895,34 +2992,53 @@ def analyze_gpos(gpos: list) -> dict:
     for gpo in gpos:
         if not gpo['links']:
             orphan_gpos.append(gpo['name'])
-        per_gpo_findings = []
-        for rule in AUDIT_RULES:
-            f = evaluate_rule_on_gpo(rule, gpo.get('settings', {}), gpo.get('registry_entries', []))
-            if f:
-                per_gpo_findings.append(f)
 
-        score = 100
-        for f in per_gpo_findings:
-            score -= {'critical': 25, 'warning': 10, 'info': 3}.get(f['severity'], 0)
-        score = max(0, score)
+        fully_disabled = is_gpo_fully_disabled(gpo)
+        computer_disabled = is_gpo_computer_disabled(gpo)
+
+        per_gpo_findings = []
+        if not fully_disabled:
+            for rule in AUDIT_RULES:
+                # Ne pas évaluer les règles Computer si la partie Computer est désactivée
+                if computer_disabled and rule.get('section') not in ('registry_xml_user',):
+                    pass  # on laisse passer — GptTmpl = computer, mais si fully_disabled on skipait déjà
+                f = evaluate_rule_on_gpo(rule, gpo.get('settings', {}), gpo.get('registry_entries', []))
+                if f:
+                    per_gpo_findings.append(f)
+
+        score = None if fully_disabled else 100
+        if score is not None:
+            for f in per_gpo_findings:
+                score -= {'critical': 25, 'warning': 10, 'info': 3}.get(f['severity'], 0)
+            score = max(0, score)
 
         # Préparer le contenu lisible de la GPO
         content_sections = _format_gpo_content(gpo)
         has_content = any(s['params'] for s in content_sections)
 
+        flags_int = _gpo_flags(gpo)
+        disabled_label = ''
+        if flags_int == 3:
+            disabled_label = 'Entièrement désactivée'
+        elif flags_int == 1:
+            disabled_label = 'Paramètres ordinateur désactivés'
+        elif flags_int == 2:
+            disabled_label = 'Paramètres utilisateur désactivés'
+
         gpo_reports.append({
-            'name':       gpo['name'],
-            'guid':       gpo['guid'],
-            'links':      gpo['links'],
-            'link_count': len(gpo['links']),
-            'flags':      gpo.get('flags', '0'),
-            'created':    gpo.get('created', ''),
-            'changed':    gpo.get('changed', ''),
-            'findings':   per_gpo_findings,
-            'score':      score,
-            'is_orphan':  not gpo['links'],
-            'has_content': has_content,
-            # content est exclu ici — chargé à la demande via gpo_content_index
+            'name':             gpo['name'],
+            'guid':             gpo['guid'],
+            'links':            gpo['links'],
+            'link_count':       len(gpo['links']),
+            'flags':            str(flags_int),
+            'disabled_label':   disabled_label,
+            'is_disabled':      fully_disabled,
+            'created':          gpo.get('created', ''),
+            'changed':          gpo.get('changed', ''),
+            'findings':         per_gpo_findings,
+            'score':            score,
+            'is_orphan':        not gpo['links'],
+            'has_content':      has_content,
         })
         # Index de contenu séparé — chargé uniquement quand on ouvre une GPO
         gpo_content_index[gpo['guid']] = content_sections
@@ -2956,7 +3072,7 @@ def analyze_gpos(gpos: list) -> dict:
     )
     param_index = {}  # (section, key, value) -> [gpo_names]
     for gpo in gpos:
-        if gpo.get('flags') == '3':
+        if is_gpo_fully_disabled(gpo):
             continue
         # Settings GptTmpl.inf
         for section, params in gpo.get('settings', {}).items():
@@ -3036,12 +3152,12 @@ def analyze_gpos(gpos: list) -> dict:
         'gpo_conflicts': gpo_conflicts,
         'conflicts_high':    conflicts_high,
         'conflicts_low':     conflicts_low,
-        'gpo_reports':       sorted(gpo_reports, key=lambda g: g['score']),
+        'gpo_reports':       sorted(gpo_reports, key=lambda g: (g['score'] if g['score'] is not None else 101)),
         'gpo_content_index': gpo_content_index,
         'all_findings':      global_findings,
         'generated_at':      datetime.now().strftime('%d/%m/%Y %H:%M'),
         'gpo_count':         len(gpos),
-        'search_index':      build_search_index(gpos),
+        'search_index':      build_search_index(_enrich_gpos_for_search(gpos, gpo_reports)),
     }
 
 
@@ -3190,6 +3306,8 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .filter-btn{padding:5px 12px;border-radius:3px;border:1px solid var(--border);background:none;cursor:pointer;font-size:12px;color:var(--txt2);font-family:'Inter',sans-serif}
 .filter-btn:hover{border-color:var(--border2);color:var(--txt)}
 .filter-btn.on{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:500}
+.combo-btn{border-color:var(--teal);color:var(--teal)}
+.combo-btn:hover{background:rgba(45,212,191,.1);border-color:var(--teal)}
 
 /* ── GPO table ── */
 .gpo-table{width:100%;border-collapse:collapse}
@@ -3345,6 +3463,7 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
     <div class="nav-item" onclick="nav('gpolist',this)"><span class="nav-icon">≡</span>GPO par GPO</div>
     <div class="nav-item" onclick="nav('bytype',this)"><span class="nav-icon">◫</span>Par type</div>
     <div class="nav-item" onclick="nav('byou',this)"><span class="nav-icon">⊢</span>Par OU</div>
+    <div class="nav-item" onclick="nav('timeline',this)"><span class="nav-icon">⏱</span>Timeline</div>
   </div>
   <div class="nav-group">
     <div class="nav-label">Résultats</div>
@@ -3358,8 +3477,16 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 
   <div class="sb-footer">
     <span style="font-size:11px;color:var(--txt3)">GPOctopus Audit · CIS · ANSSI · MS Baseline</span>
-    <div class="theme-toggle has-tooltip" onclick="toggleTheme()" title="">
-      <span class="tooltip">Basculer thème</span>
+    <div style="display:flex;gap:8px;align-items:center">
+      <div class="has-tooltip" style="cursor:pointer;font-size:18px;color:var(--txt3)" onclick="exportFindings('csv')" title="">
+        <span class="tooltip">Exporter findings CSV</span>⬇
+      </div>
+      <div class="has-tooltip" style="cursor:pointer;font-size:18px;color:var(--txt3)" onclick="exportFindings('md')" title="">
+        <span class="tooltip">Exporter findings Markdown</span>📋
+      </div>
+      <div class="theme-toggle has-tooltip" onclick="toggleTheme()" title="">
+        <span class="tooltip">Basculer thème</span>
+      </div>
     </div>
   </div>
 </nav>
@@ -3461,33 +3588,53 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 <!-- ══ SEARCH ══ -->
 <div id="view-search" class="view">
   <div class="view-header">
-    <div class="view-title">⌕ Recherche dans toutes les GPO</div>
-    <div class="view-sub">Cherchez un paramètre, une imprimante, un script, un chemin réseau, un service… dans l'ensemble de vos GPO</div>
+    <div class="view-title">⌕ Recherche &amp; Diagnostic GPO</div>
+    <div class="view-sub">Recherche multi-termes intelligente — synonymes automatiques · diagnostic causal OU/priorité inclus</div>
   </div>
 
-  <div style="margin-bottom:20px">
+  <div style="margin-bottom:16px">
     <div style="position:relative">
       <span style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--txt3);font-size:18px;pointer-events:none">⌕</span>
       <input id="search-main-input" type="text"
-        placeholder="Ex: \\\\print01, startup.ps1, minimumpasswordlength, SMB, proxy, 192.168…"
-        style="width:100%;padding:14px 14px 14px 44px;background:var(--surface);border:1px solid var(--border2);border-radius:3px;color:var(--txt);font-size:14px;font-family:'Inter',sans-serif;outline:none;transition:border-color .15s"
+        placeholder="Ex: RDS imprimante · lecteur réseau startup · print01 logon · SMB proxy…"
+        style="width:100%;padding:14px 14px 14px 44px;background:var(--surface);border:1px solid var(--border2);border-radius:3px;color:var(--txt);font-size:14px;font-family:'Inter',sans-serif;outline:none;transition:border-color .15s;box-sizing:border-box"
         oninput="globalSearch(this.value)"
         onfocus="this.style.borderColor='var(--blue)'"
         onblur="this.style.borderColor='var(--border2)'"
       >
     </div>
+    <div style="font-size:11px;color:var(--txt3);margin-top:6px;padding-left:2px">
+      💡 Plusieurs mots = ET automatique · Synonymes inclus automatiquement (ex: "RDS" trouve aussi "Terminal Services", "RemoteApp")
+    </div>
+  </div>
 
-    <!-- Filtres rapides -->
-    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px" id="search-quick-filters">
-      <span style="font-size:11px;color:var(--txt3);align-self:center;margin-right:4px">Raccourcis :</span>
+  <!-- Raccourcis simples -->
+  <div style="margin-bottom:10px">
+    <div style="font-size:11px;color:var(--txt3);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Raccourcis simples</div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px">
       <button class="filter-btn" onclick="quickSearch('imprimante')">🖨 Imprimantes</button>
-      <button class="filter-btn" onclick="quickSearch('lecteur réseau')">💾 Lecteurs</button>
+      <button class="filter-btn" onclick="quickSearch('lecteur réseau')">💾 Lecteurs réseau</button>
       <button class="filter-btn" onclick="quickSearch('script')">📜 Scripts</button>
-      <button class="filter-btn" onclick="quickSearch('tâche planifiée')">⏰ Tâches</button>
+      <button class="filter-btn" onclick="quickSearch('tâche planifiée')">⏰ Tâches planifiées</button>
       <button class="filter-btn" onclick="quickSearch('service windows')">🔧 Services</button>
       <button class="filter-btn" onclick="quickSearch('registre')">🗝 Registre</button>
-      <button class="filter-btn" onclick="quickSearch('groupe local')">👥 Groupes</button>
-      <button class="filter-btn" onclick="quickSearch('lien ou')">⊢ Liens OU</button>
+      <button class="filter-btn" onclick="quickSearch('groupe local')">👥 Groupes locaux</button>
+      <button class="filter-btn" onclick="quickSearch('raccourci')">🔗 Raccourcis</button>
+    </div>
+  </div>
+
+  <!-- Combinaisons diagnostic -->
+  <div style="margin-bottom:16px">
+    <div style="font-size:11px;color:var(--txt3);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.05em">🔗 Combinaisons diagnostic — GPO touchant plusieurs domaines à la fois</div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px">
+      <button class="filter-btn combo-btn" onclick="quickSearch('imprimante lecteur')" title="GPO qui mappent à la fois des imprimantes ET des lecteurs réseau">🖨+💾 Imprimante &amp; Lecteur</button>
+      <button class="filter-btn combo-btn" onclick="quickSearch('RDS imprimante')" title="GPO RDS/Terminal Services liées à des imprimantes">🖥+🖨 RDS &amp; Imprimante</button>
+      <button class="filter-btn combo-btn" onclick="quickSearch('logon script imprimante')" title="Scripts logon qui configurent aussi des imprimantes">📜+🖨 Script logon &amp; Imprimante</button>
+      <button class="filter-btn combo-btn" onclick="quickSearch('startup script lecteur')" title="Scripts démarrage qui mappent des lecteurs réseau">📜+💾 Script startup &amp; Lecteur</button>
+      <button class="filter-btn combo-btn" onclick="quickSearch('tâche planifiée script')" title="GPO avec tâches planifiées ET scripts">⏰+📜 Tâche &amp; Script</button>
+      <button class="filter-btn combo-btn" onclick="quickSearch('service registre')" title="GPO qui configurent des services ET le registre">🔧+🗝 Service &amp; Registre</button>
+      <button class="filter-btn combo-btn" onclick="quickSearch('groupe logon')" title="GPO qui gèrent des groupes locaux ET des scripts de session">👥+📜 Groupe &amp; Script logon</button>
+      <button class="filter-btn combo-btn" onclick="quickSearch('proxy internet')" title="GPO de configuration proxy/Internet">🌐 Proxy &amp; Internet</button>
     </div>
   </div>
 
@@ -3500,22 +3647,28 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
     </div>
   </div>
 
-  <!-- Résultats -->
-  <div id="search-results-header" style="display:none;margin-bottom:12px">
+  <!-- Header résultats -->
+  <div id="search-results-header" style="display:none;margin-bottom:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
     <span id="search-count" style="font-size:13px;color:var(--txt2)"></span>
-    <span id="search-gpo-count" style="font-size:12px;color:var(--txt3);margin-left:8px"></span>
+    <span id="search-gpo-count" style="font-size:12px;color:var(--txt3)"></span>
+    <span id="search-synonym-hint" style="font-size:11px;color:var(--teal)"></span>
   </div>
 
   <div id="search-results"></div>
 
   <!-- État initial -->
-  <div id="search-empty-state" style="text-align:center;padding:60px 20px;color:var(--txt3)">
+  <div id="search-empty-state" style="text-align:center;padding:50px 20px;color:var(--txt3)">
     <div style="font-size:48px;margin-bottom:16px">⌕</div>
-    <div style="font-size:15px;font-weight:500;margin-bottom:8px">Recherchez dans toutes vos GPO</div>
-    <div style="font-size:13px;line-height:1.8">
-      Chemin UNC d'imprimante · Lettre de lecteur · Nom de script<br>
-      Clé de registre · Nom de service · Commande de tâche planifiée<br>
-      Nom de groupe · Variable d'environnement · Paramètre de sécurité
+    <div style="font-size:15px;font-weight:500;margin-bottom:8px">Recherche intelligente multi-termes</div>
+    <div style="font-size:13px;line-height:2;margin-bottom:16px">
+      <strong style="color:var(--txt2)">Exemple :</strong> tapez <code style="background:var(--surface2);padding:2px 6px;border-radius:3px">RDS imprimante</code><br>
+      → trouve toutes les GPO qui touchent à la fois RDS <em>et</em> des imprimantes<br>
+      → affiche l'OU liée, si la GPO est forcée (Enforced), et pourquoi elle s'applique
+    </div>
+    <div style="font-size:12px;color:var(--txt3);line-height:1.8">
+      Chemin UNC · Lettre de lecteur · Nom de script · Clé de registre<br>
+      Nom de service · Commande · Nom de groupe · Paramètre de sécurité<br>
+      <span style="color:var(--teal)">+ synonymes : RDS↔Terminal Services · SMB↔CIFS · GPO↔stratégie…</span>
     </div>
   </div>
 </div>
@@ -3760,6 +3913,25 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
   {% endif %}
 </div>
 
+<!-- ══ TIMELINE ══ -->
+<div id="view-timeline" class="view">
+  <div class="view-header">
+    <div class="view-title">⏱ Timeline des modifications GPO</div>
+    <div class="view-sub">GPO triées par date de dernière modification — identifiez ce qui a changé récemment</div>
+  </div>
+  <div class="toolbar" style="margin-bottom:16px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:11px;color:var(--txt3)">Période :</span>
+      <button class="filter-btn on" id="tl-btn-all"  onclick="filterTimeline('all',this)">Tout</button>
+      <button class="filter-btn"    id="tl-btn-7"    onclick="filterTimeline(7,this)">7 jours</button>
+      <button class="filter-btn"    id="tl-btn-30"   onclick="filterTimeline(30,this)">30 jours</button>
+      <button class="filter-btn"    id="tl-btn-90"   onclick="filterTimeline(90,this)">90 jours</button>
+      <button class="filter-btn"    id="tl-btn-365"  onclick="filterTimeline(365,this)">1 an</button>
+    </div>
+  </div>
+  <div id="timeline-content"></div>
+</div>
+
 <!-- ══ ORPHANS ══ -->
 <div id="view-orphans" class="view">
   <div class="view-header">
@@ -3880,6 +4052,7 @@ function nav(id, el) {
     if (id === 'bytype')      renderByType();
     if (id === 'byou')        renderByOU('');
     if (id === 'priorities')  renderPriorities();
+    if (id === 'timeline')    renderTimeline();
   }
 
   // Ré-animer les stagger items
@@ -4206,31 +4379,235 @@ function renderByType() {
 
 // ── By OU ──
 function renderByOU(filter) {
+  // OU → liste de GPO dans l'ordre de priorité (index dans _gpos = priorité : dernier = plus haute)
   const ous = {};
-  _gpos.forEach(g => (g.links||[]).forEach(l => {
-    const ou = l.ou||'(racine)';
+  _gpos.forEach((g, gpoIdx) => (g.links||[]).forEach(l => {
+    const ou = l.ou || '(racine domaine)';
     if (filter && !ou.toLowerCase().includes(filter)) return;
     if (!ous[ou]) ous[ou] = [];
-    ous[ou].push({ name:g.name, guid:g.guid, enforced:l.enforced, disabled:l.disabled });
+    ous[ou].push({
+      name: g.name, guid: g.guid, gpoIdx,
+      enforced: l.enforced, disabled: l.disabled,
+      score: g.score, flags: g.flags,
+      changed: g.changed || '',
+      is_disabled: g.is_disabled,
+      disabled_label: g.disabled_label || '',
+    });
   }));
+
+  // Trier les GPO dans chaque OU : enforced d'abord, puis par ordre de priorité descendant
+  Object.values(ous).forEach(gpoList => {
+    gpoList.sort((a, b) => {
+      if (a.enforced !== b.enforced) return a.enforced ? -1 : 1;
+      return b.gpoIdx - a.gpoIdx; // index plus élevé = priorité plus haute dans Windows
+    });
+    // Annoter avec le rang de priorité
+    let priority = 1;
+    [...gpoList].reverse().forEach(g => { g.priority = priority++; });
+  });
+
+  const _scoreColor = s => s === null ? 'var(--txt3)' : s >= 70 ? 'var(--green)' : s >= 40 ? 'var(--amber)' : 'var(--red)';
+
   document.getElementById('byou-content').innerHTML =
-    Object.entries(ous).sort((a,b)=>b[1].length-a[1].length).map(([ou,gpos]) => `
+    Object.entries(ous).sort((a,b) => b[1].length - a[1].length).map(([ou, gpoList]) => {
+      // Chemin OU lisible
+      const ouParts = ou.split(',').filter(p => p.startsWith('OU=')).map(p => p.slice(3)).reverse();
+      const ouLabel = ouParts.length > 0 ? ouParts.join(' › ') : ou;
+      const ouShort = ouParts.length > 0 ? ouParts[ouParts.length - 1] : ou;
+      const enforced = gpoList.filter(g => g.enforced).length;
+
+      return `
       <div class="ou-card">
         <div class="ou-head" onclick="togOU(this)">
           <span style="color:var(--teal);font-size:12px">⊢</span>
-          <span style="flex:1;font-size:12px;font-family:'JetBrains Mono',monospace">${ou}</span>
-          <span style="font-size:11px;color:var(--txt3)">${gpos.length} GPO ▶</span>
+          <span style="flex:1;font-size:12px;font-family:'JetBrains Mono',monospace" title="${ou}">${ouLabel}</span>
+          <span style="font-size:11px;color:var(--txt3)">
+            ${gpoList.length} GPO${enforced > 0 ? ` · <span style="color:var(--red)">${enforced} enforced</span>` : ''}
+            ▶
+          </span>
         </div>
-        <div class="ou-body">${gpos.map(g=>`
-          <div class="ou-gpo-row">
-            <span style="color:var(--blue);cursor:pointer" onclick="showGPODetail('${g.guid}')">${g.name}</span>
-            ${g.enforced?'<span class="flag flag-disabled">enforced</span>':''}
-            ${g.disabled?'<span class="flag" style="background:var(--surface3);color:var(--txt2)">lien désactivé</span>':''}
-          </div>`).join('')}
+        <div class="ou-body">
+          <div style="font-size:10px;color:var(--txt3);padding:4px 8px 8px;border-bottom:1px solid var(--border);display:flex;gap:16px">
+            <span>Ordre d'application Windows : priorité 1 (basse) → priorité ${gpoList.length} (haute)</span>
+            <span style="color:var(--teal)">↑ = appliqué en dernier = gagne les conflits</span>
+          </div>
+          ${gpoList.map(g => {
+            const scoreColor = _scoreColor(g.score);
+            const scoreBadge = g.is_disabled
+              ? `<span style="font-size:10px;color:var(--txt3);font-style:italic">${g.disabled_label || 'désactivée'}</span>`
+              : g.score !== null
+                ? `<span style="font-size:10px;color:${scoreColor}">Score ${g.score}/100</span>`
+                : '';
+            const changedBadge = g.changed
+              ? `<span style="font-size:10px;color:var(--txt3)">Modif: ${g.changed.slice(0,10)}</span>`
+              : '';
+            const priorityBadge = `<span style="font-size:10px;min-width:70px;color:var(--txt3)">Priorité ${g.priority}</span>`;
+            return `
+            <div class="ou-gpo-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              ${priorityBadge}
+              <span style="color:var(--blue);cursor:pointer;flex:1;font-size:12px" onclick="showGPODetail('${g.guid}')">${g.name}</span>
+              ${scoreBadge}
+              ${changedBadge}
+              ${g.enforced ? '<span class="flag flag-disabled">ENFORCED</span>' : ''}
+              ${g.disabled ? '<span class="flag" style="background:var(--surface3);color:var(--txt2)">lien désactivé</span>' : ''}
+              ${g.is_disabled ? '<span class="flag" style="background:var(--surface3);color:var(--txt3)">GPO désactivée</span>' : ''}
+            </div>`;
+          }).join('')}
         </div>
-      </div>`).join('') || '<div style="color:var(--txt3);padding:20px">Aucune OU trouvée.</div>';
+      </div>`;
+    }).join('') || '<div style="color:var(--txt3);padding:20px">Aucune OU trouvée.</div>';
 }
 function searchOU(q) { renderByOU(q.toLowerCase()); }
+
+// ── Timeline ──────────────────────────────────────────────────────────────
+let _tlDays = 'all';
+
+function filterTimeline(days, btn) {
+  _tlDays = days;
+  document.querySelectorAll('#view-timeline .filter-btn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  renderTimeline();
+}
+
+function renderTimeline() {
+  const now = new Date();
+  const cutoff = _tlDays === 'all' ? null : new Date(now - _tlDays * 86400000);
+
+  // Préparer les GPO avec une date parsée
+  const withDate = _gpos.map(g => {
+    let d = null;
+    const raw = g.changed || g.created || '';
+    if (raw) {
+      // Formats possibles : "2024-03-01", "20240301120000.0Z" (LDAP), "2024-03-01 12:00:00"
+      try {
+        if (/^\d{14}/.test(raw)) {
+          // Format LDAP : YYYYMMDDHHmmss.0Z
+          const y = raw.slice(0,4), mo = raw.slice(4,6), dy = raw.slice(6,8);
+          d = new Date(`${y}-${mo}-${dy}`);
+        } else {
+          d = new Date(raw.slice(0,10));
+        }
+        if (isNaN(d)) d = null;
+      } catch(e) { d = null; }
+    }
+    return { ...g, _date: d };
+  }).filter(g => g._date && (!cutoff || g._date >= cutoff));
+
+  withDate.sort((a, b) => b._date - a._date);
+
+  if (!withDate.length) {
+    document.getElementById('timeline-content').innerHTML =
+      `<div style="color:var(--txt3);padding:30px;text-align:center">Aucune GPO avec une date de modification dans cette période.</div>`;
+    return;
+  }
+
+  // Grouper par mois
+  const byMonth = {};
+  withDate.forEach(g => {
+    const key = g._date.toLocaleDateString('fr-FR', { year:'numeric', month:'long' });
+    if (!byMonth[key]) byMonth[key] = [];
+    byMonth[key].push(g);
+  });
+
+  const _scoreColor = s => s === null ? 'var(--txt3)' : s >= 70 ? 'var(--green)' : s >= 40 ? 'var(--amber)' : 'var(--red)';
+
+  document.getElementById('timeline-content').innerHTML =
+    Object.entries(byMonth).map(([month, gpos]) => `
+      <div style="margin-bottom:20px">
+        <div style="font-size:12px;font-weight:600;color:var(--txt3);text-transform:uppercase;letter-spacing:.08em;padding:4px 0;border-bottom:1px solid var(--border);margin-bottom:8px">${month} — ${gpos.length} GPO</div>
+        ${gpos.map(g => {
+          const scoreColor = _scoreColor(g.score);
+          const scoreBadge = g.is_disabled
+            ? `<span style="font-size:10px;color:var(--txt3)">${g.disabled_label||'désactivée'}</span>`
+            : g.score !== null
+              ? `<span style="color:${scoreColor};font-size:11px;font-weight:600">Score ${g.score}/100</span>`
+              : '';
+          const ouList = (g.links||[]).map(l => {
+            const ou = (l.ou||'').split(',').filter(p=>p.startsWith('OU=')).map(p=>p.slice(3)).reverse().join(' › ') || l.ou || '(racine)';
+            return `<span style="font-size:10px;color:var(--txt3)">${ou}${l.enforced?' <span style="color:var(--red)">ENFORCED</span>':''}</span>`;
+          }).join(' · ');
+          const critCount = (g.findings||[]).filter(f=>f.severity==='critical').length;
+          return `
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:10px 14px;margin-bottom:6px;display:flex;align-items:flex-start;gap:12px;cursor:pointer"
+               onclick="showGPODetail('${g.guid}')">
+            <div style="min-width:68px;text-align:right">
+              <div style="font-size:11px;font-weight:600;color:var(--txt2)">${g._date.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'})}</div>
+              <div style="font-size:10px;color:var(--txt3)">${g._date.getFullYear()}</div>
+            </div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:500;color:var(--blue);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g.name}</div>
+              <div style="font-size:11px;color:var(--txt3);margin-top:2px">${ouList || 'Non liée'}</div>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              ${scoreBadge}
+              ${critCount > 0 ? `<span style="background:rgba(255,95,95,.12);color:var(--red);border-radius:3px;padding:1px 6px;font-size:10px">${critCount} critique${critCount>1?'s':''}</span>` : ''}
+              ${g.is_disabled ? '<span style="font-size:10px;color:var(--txt3);border:1px solid var(--border);border-radius:3px;padding:1px 5px">désactivée</span>' : ''}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`
+    ).join('');
+}
+
+// ── Export findings ───────────────────────────────────────────────────────
+function exportFindings(fmt) {
+  const findings = _findingsData || [];
+  if (!findings.length) { alert('Aucun finding à exporter.'); return; }
+
+  let content, mime, filename;
+
+  if (fmt === 'csv') {
+    const header = 'ID,Sévérité,Catégorie,Titre,Référence,Remédiation';
+    const rows = findings.map(f => [
+      f.rule_id||'', f.severity||'', f.category||'',
+      `"${(f.title||'').replace(/"/g,'""')}"`,
+      `"${(f.ref||'').replace(/"/g,'""')}"`,
+      `"${(f.remediation||'').replace(/"/g,'""')}"`,
+    ].join(','));
+    content = [header, ...rows].join('\n');
+    mime = 'text/csv;charset=utf-8';
+    filename = 'gpoctopus_findings.csv';
+
+  } else {
+    const lines = [
+      '# GPOctopus Audit — Findings de sécurité',
+      `> Généré le ${new Date().toLocaleDateString('fr-FR')} · ${findings.length} constatations`,
+      '',
+    ];
+    const sevOrder = { critical: 0, warning: 1, info: 2 };
+    const sorted = [...findings].sort((a,b) => (sevOrder[a.severity]??9) - (sevOrder[b.severity]??9));
+    const bySev = {};
+    sorted.forEach(f => {
+      if (!bySev[f.severity]) bySev[f.severity] = [];
+      bySev[f.severity].push(f);
+    });
+    const sevLabels = { critical: '🔴 Critiques', warning: '🟡 Avertissements', info: '🔵 Informatifs' };
+    Object.entries(bySev).forEach(([sev, flist]) => {
+      lines.push(`## ${sevLabels[sev]||sev} (${flist.length})`);
+      flist.forEach(f => {
+        lines.push(`\n### ${f.title}`);
+        lines.push(`- **ID** : ${f.rule_id||'—'}`);
+        lines.push(`- **Référence** : ${f.ref||'—'}`);
+        lines.push(`- **Catégorie** : ${f.category||'—'}`);
+        if (f.detail) lines.push(`- **Détail** : ${f.detail}`);
+        lines.push(`- **Remédiation** : ${f.remediation||'—'}`);
+        if (f.source_gpos && f.source_gpos.length > 0) {
+          lines.push(`- **GPO concernée(s)** : ${f.source_gpos.map(g=>g.name).join(', ')}`);
+        }
+      });
+      lines.push('');
+    });
+    content = lines.join('\n');
+    mime = 'text/markdown;charset=utf-8';
+    filename = 'gpoctopus_findings.md';
+  }
+
+  const blob = new Blob(['\uFEFF' + content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 // ── Conflict filters ──
 function filtConflicts(mode, btn) {
@@ -4264,11 +4641,71 @@ const _conflictsData   = {{ data.gpo_conflicts | tojson }};
 const _searchIndex     = {{ data.search_index | tojson }};
 const _gpoContentIndex = {{ data.gpo_content_index | tojson }};
 
-// Construire search_blob côté client une seule fois (évite de le sérialiser dans le HTML)
+// Construire search_blob côté client une seule fois
 _searchIndex.forEach(item => {
   item.search_blob = [item.gpo_name, item.type, item.key, item.value, item.context]
     .filter(Boolean).join(' ').toLowerCase();
 });
+
+// ── Table de synonymes sémantiques ──────────────────────────────────────────
+const SYNONYMS = [
+  ['rds',        'terminal', 'remoteapp', 'remotefx', 'mstsc', 'rdp', 'bureau à distance', 'thinprint'],
+  ['terminal',   'rds', 'remoteapp', 'rdp'],
+  ['rdp',        'rds', 'terminal', 'mstsc'],
+  ['imprimante', 'printer', 'print', 'spooler', 'printers', 'thinprint'],
+  ['printer',    'imprimante', 'print', 'spooler'],
+  ['print',      'imprimante', 'printer', 'spooler'],
+  ['lecteur',    'drive', 'drives', 'réseau', 'partage', 'unc'],
+  ['drive',      'lecteur', 'réseau', 'unc'],
+  ['réseau',     'lecteur', 'drive', 'unc', 'partage'],
+  ['script',     'scripts', 'logon', 'startup', 'shutdown', 'logoff', 'ps1', 'bat', 'cmd', 'vbs'],
+  ['logon',      'script', 'ouverture de session'],
+  ['startup',    'script', 'démarrage'],
+  ['smb',        'cifs', 'lanman', 'partage', 'smbv1', 'samba'],
+  ['cifs',       'smb', 'partage'],
+  ['ntlm',       'lm', 'kerberos', 'authentification', 'ntlmv2'],
+  ['kerberos',   'ntlm', 'authentification', 'ticket'],
+  ['firewall',   'pare-feu', 'parefeu'],
+  ['pare-feu',   'firewall', 'parefeu'],
+  ['proxy',      'internet', 'wpad', 'pac', 'ie', 'edge'],
+  ['internet',   'proxy', 'ie', 'wpad'],
+  ['uac',        'lua', 'elevation', 'élévation', 'token'],
+  ['wdigest',    'lsass', 'credential', 'plaintext'],
+  ['lsass',      'wdigest', 'runasppl', 'credential guard'],
+  ['registre',   'registry', 'regedit', 'hklm', 'hkcu', 'hkey'],
+  ['registry',   'registre', 'hklm', 'hkcu'],
+  ['tâche',      'task', 'scheduled', 'planifiée'],
+  ['task',       'tâche', 'planifiée', 'scheduled'],
+  ['service',    'services', 'daemon'],
+  ['groupe',     'group', 'administrators', 'members', 'membre'],
+  ['group',      'groupe', 'administrators'],
+  ['gpo',        'stratégie', 'policy', 'policies'],
+  ['stratégie',  'gpo', 'policy'],
+  ['bitlocker',  'chiffrement', 'encryption', 'tpm'],
+  ['wsus',       'update', 'windows update', 'mise à jour'],
+  ['antivirus',  'defender', 'wdav', 'malware'],
+  ['vpn',        'ipsec', 'tunnel', 'directaccess'],
+];
+
+const _synonymMap = {};
+SYNONYMS.forEach(([key, ...syns]) => {
+  if (!_synonymMap[key]) _synonymMap[key] = new Set();
+  syns.forEach(s => _synonymMap[key].add(s));
+});
+
+function _expandTokens(tokens) {
+  const expanded = [];
+  const synonymsUsed = {};
+  tokens.forEach(t => {
+    expanded.push(t);
+    const syns = _synonymMap[t];
+    if (syns && syns.size > 0) {
+      synonymsUsed[t] = [...syns];
+      syns.forEach(s => expanded.push(s));
+    }
+  });
+  return { expandedTokens: expanded, synonymsUsed };
+}
 
 // ── Moteur de recherche global ──────────────────────────────────────────────
 let _searchTypeFilter = 'all';
@@ -4276,18 +4713,15 @@ let _lastQuery = '';
 
 function quickSearch(q) {
   document.getElementById('search-main-input').value = q;
-  nav('search', document.querySelector('[onclick*="nav(\'search\'"]') ||
-      document.querySelector('.nav-item:nth-child(1)'));
+  const searchView = document.getElementById('view-search');
+  if (searchView && !searchView.classList.contains('active')) {
+    nav('search', document.querySelector('.nav-item[onclick*="\'search\'"]'));
+  }
   globalSearch(q);
 }
 
 function globalSearch(q) {
-  // Ne pas trimmer ici — garder les espaces pour permettre la saisie multi-mots.
-  // Le trim se fait uniquement sur les tokens lors du split.
   _lastQuery = q;
-
-  // Sync les deux champs UNIQUEMENT si la valeur est vraiment différente
-  // (évite de réinjecter une valeur trimée qui ferait sauter le curseur)
   const mainInput = document.getElementById('search-main-input');
   if (mainInput && document.activeElement !== mainInput && mainInput.value !== q) mainInput.value = q;
 
@@ -4295,9 +4729,9 @@ function globalSearch(q) {
   const resultsDiv  = document.getElementById('search-results');
   const headerDiv   = document.getElementById('search-results-header');
   const typeFilters = document.getElementById('search-type-filters');
+  const synHint     = document.getElementById('search-synonym-hint');
 
   const qTrimmed = q.trim();
-
   if (!qTrimmed || qTrimmed.length < 2) {
     emptyState.style.display  = '';
     resultsDiv.innerHTML      = '';
@@ -4308,38 +4742,40 @@ function globalSearch(q) {
   }
   emptyState.style.display = 'none';
 
-  const tokens = qTrimmed.toLowerCase().split(/\s+/).filter(Boolean);
+  const rawTokens = qTrimmed.toLowerCase().split(/\s+/).filter(Boolean);
+  const { synonymsUsed } = _expandTokens(rawTokens);
 
-  // ── Logique ET inter-catégories ─────────────────────────────────────────
-  // 1 token  : ET dans la même entrée (standard)
-  // N tokens : ET au niveau GPO — chaque token doit matcher AU MOINS UNE
-  //            entrée dans la GPO, mais pas forcément la même.
-  //            Ex: "RDS imprimante" → GPO contenant RDS ET imprimante
-  //            (même si c'est dans deux paramètres différents)
+  // Étape 1 : pour chaque entrée, quels tokens originaux sont couverts ?
+  const candidates = _searchIndex.map(item => {
+    const covered = rawTokens.filter(t => {
+      if (item.search_blob.includes(t)) return true;
+      const syns = _synonymMap[t];
+      return syns && [...syns].some(s => item.search_blob.includes(s));
+    });
+    return covered.length > 0 ? { ...item, _covered: covered } : null;
+  }).filter(Boolean);
 
-  // Étape 1 : entrées qui matchent au moins un token
-  const candidates = _searchIndex
-    .map(item => {
-      const matched = tokens.filter(t => item.search_blob.includes(t));
-      return matched.length > 0 ? { ...item, _matched: matched } : null;
-    })
-    .filter(Boolean);
-
-  // Étape 2 : grouper par GPO, union des tokens couverts
+  // Étape 2 : grouper par GPO, récupérer les métadonnées pour le diagnostic
   const byGpo = {};
   candidates.forEach(item => {
     if (!byGpo[item.gpo_guid]) {
-      byGpo[item.gpo_guid] = { name: item.gpo_name, guid: item.gpo_guid,
-                                items: [], covered: new Set() };
+      const gpoMeta = _gpos.find(x => x.guid === item.gpo_guid) || {};
+      byGpo[item.gpo_guid] = {
+        name: item.gpo_name, guid: item.gpo_guid,
+        items: [], covered: new Set(),
+        links: gpoMeta.links || [],
+        score: gpoMeta.score,
+        findings: gpoMeta.findings || [],
+        is_disabled: gpoMeta.is_disabled,
+        disabled_label: gpoMeta.disabled_label || '',
+      };
     }
-    item._matched.forEach(t => byGpo[item.gpo_guid].covered.add(t));
+    item._covered.forEach(t => byGpo[item.gpo_guid].covered.add(t));
     byGpo[item.gpo_guid].items.push(item);
   });
 
-  // Étape 3 : ne garder que les GPO couvrant TOUS les tokens
-  let gpoGroups = Object.values(byGpo).filter(g =>
-    tokens.every(t => g.covered.has(t))
-  );
+  // Étape 3 : garder uniquement les GPO couvrant TOUS les tokens
+  let gpoGroups = Object.values(byGpo).filter(g => rawTokens.every(t => g.covered.has(t)));
 
   // Filtre par type
   if (_searchTypeFilter !== 'all') {
@@ -4348,7 +4784,14 @@ function globalSearch(q) {
       .filter(g => g.items.length > 0);
   }
 
-  // Comptage par type (pour les boutons filtres)
+  // Scoring : types distincts × 5 + nombre d'entrées × 2 + bonus enforced
+  gpoGroups.forEach(g => {
+    const types = new Set(g.items.map(i => i.type));
+    g._relevance = g.items.length * 2 + types.size * 5 + (g.links.some(l => l.enforced) ? 3 : 0);
+  });
+  gpoGroups.sort((a, b) => b._relevance - a._relevance);
+
+  // Comptage par type pour les filtres
   const typeCounts = {};
   gpoGroups.forEach(g => g.items.forEach(item => {
     typeCounts[item.type] = (typeCounts[item.type] || 0) + 1;
@@ -4360,7 +4803,7 @@ function globalSearch(q) {
       Object.entries(typeCounts).sort((a,b) => b[1]-a[1]).map(([type, count]) => {
         const icon = (_searchIndex.find(i => i.type === type) || {}).type_icon || '📄';
         const on = _searchTypeFilter === type ? ' on' : '';
-        return `<button class="filter-btn${on}" onclick="setSearchType('${type.replace(/'/g,"\'")}',this)">${icon} ${type} (${count})</button>`;
+        return `<button class="filter-btn${on}" onclick="setSearchType('${type.replace(/'/g,"\\'")}',this)">${icon} ${type} (${count})</button>`;
       }).join('');
   } else {
     typeFilters.style.display = 'none';
@@ -4368,83 +4811,133 @@ function globalSearch(q) {
 
   // Header
   const totalItems = gpoGroups.reduce((a, g) => a + g.items.length, 0);
-  headerDiv.style.display = '';
-  const modeHint = tokens.length > 1
-    ? `<span style="font-size:11px;color:var(--teal);margin-left:10px"
-           title="Chaque mot doit apparaître quelque part dans la GPO — pas forcément dans le même paramètre">
-         ⊕ ET inter-catégories
-       </span>`
+  headerDiv.style.display = 'flex';
+  const modeHint = rawTokens.length > 1
+    ? `<span style="font-size:11px;color:var(--teal)" title="Chaque mot doit apparaître quelque part dans la GPO">⊕ ET inter-catégories</span>`
     : '';
-  document.getElementById('search-count').innerHTML =
-    `${totalItems} résultat${totalItems !== 1 ? 's' : ''}${modeHint}`;
-  document.getElementById('search-gpo-count').textContent =
-    `dans ${gpoGroups.length} GPO`;
+  document.getElementById('search-count').innerHTML = `${totalItems} résultat${totalItems!==1?'s':''}${modeHint}`;
+  document.getElementById('search-gpo-count').textContent = `dans ${gpoGroups.length} GPO`;
+
+  if (synHint) {
+    const synKeys = Object.keys(synonymsUsed);
+    synHint.innerHTML = synKeys.length > 0
+      ? `🔄 Synonymes : ${synKeys.map(k => `<strong>${_escHtml(k)}</strong>→${synonymsUsed[k].slice(0,2).map(s=>`<em>${_escHtml(s)}</em>`).join(',')}`).join(' · ')}`
+      : '';
+  }
 
   if (!gpoGroups.length) {
-    const best = tokens
-      .map(t => ({ t, n: _searchIndex.filter(i => i.search_blob.includes(t)).length }))
-      .sort((a,b) => b.n - a.n)[0];
-    const hint = best && best.n > 0
-      ? `<div style="font-size:12px;margin-top:8px;color:var(--txt3)">
-           "<strong style="color:var(--blue)">${_escHtml(best.t)}</strong>" seul donne ${best.n} résultat${best.n>1?'s':''} —
-           aucune GPO ne contient tous les termes ensemble.
-         </div>` : '';
+    const hints = rawTokens.map(t => {
+      const syns = _synonymMap[t] ? [..._synonymMap[t]] : [];
+      const n = _searchIndex.filter(i => i.search_blob.includes(t) || syns.some(s => i.search_blob.includes(s))).length;
+      return { t, n };
+    }).filter(x => x.n > 0).sort((a,b) => b.n - a.n);
     resultsDiv.innerHTML = `
       <div style="text-align:center;padding:40px;color:var(--txt3)">
         <div style="font-size:32px;margin-bottom:12px">🔍</div>
         <div style="font-size:14px">Aucune GPO ne contient "<strong style="color:var(--txt)">${_escHtml(q)}</strong>"</div>
-        ${hint}
+        ${hints.length > 0 ? `<div style="font-size:12px;margin-top:8px">
+          ${hints.map(h=>`"<strong style="color:var(--blue)">${_escHtml(h.t)}</strong>" seul → ${h.n} résultat${h.n>1?'s':''}`).join(' · ')}<br>
+          <span style="color:var(--amber)">→ Aucune GPO ne contient tous ces termes ensemble.</span>
+        </div>` : ''}
       </div>`;
     return;
   }
 
-  // Trier par pertinence (le plus d'entrées matchées en premier)
-  gpoGroups.sort((a,b) => b.items.length - a.items.length);
-
+  // ── Rendu des entrées ──
   const renderRows = (items) => {
-    const shown = items.slice(0, 20);
+    const allToks = [...rawTokens, ...rawTokens.flatMap(t=>[...(_synonymMap[t]||[])])];
+    const shown = items.slice(0, 25);
     const more  = items.length - shown.length;
-    const rows  = shown.map(item => {
-      return `<tr style="cursor:pointer" onclick="showGPODetail('${item.gpo_guid}')">
-        <td style="padding:6px 10px;border-bottom:1px solid var(--border);width:24px;text-align:center;font-size:14px">${item.type_icon}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);white-space:nowrap;width:170px">${_highlight(item.type, tokens)}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:13px;font-weight:500;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.key, tokens)}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;font-family:'JetBrains Mono',monospace;color:var(--txt2);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.value, tokens)}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.context, tokens)}</td>
-      </tr>`;
-    }).join('');
-    const moreRow = more > 0
-      ? `<tr><td colspan="5" style="padding:5px 10px;font-size:11px;color:var(--txt3);font-style:italic">… ${more} entrée${more>1?'s':''} supplémentaire${more>1?'s':''}</td></tr>`
-      : '';
+    const rows  = shown.map(item => `
+      <tr style="cursor:pointer" onclick="showGPODetail('${item.gpo_guid}')">
+        <td style="padding:5px 10px;border-bottom:1px solid var(--border);width:20px;text-align:center;font-size:13px">${item.type_icon}</td>
+        <td style="padding:5px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);white-space:nowrap;width:150px">${_highlight(item.type, allToks)}</td>
+        <td style="padding:5px 10px;border-bottom:1px solid var(--border);font-size:12px;font-weight:500;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.key, allToks)}</td>
+        <td style="padding:5px 10px;border-bottom:1px solid var(--border);font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--txt2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.value, allToks)}</td>
+        <td style="padding:5px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--txt3);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_highlight(item.context, allToks)}</td>
+      </tr>`).join('');
+    const moreRow = more > 0 ? `<tr><td colspan="5" style="padding:4px 10px;font-size:11px;color:var(--txt3);font-style:italic">… ${more} entrée${more>1?'s':''} supplémentaire${more>1?'s':''}</td></tr>` : '';
     return `<table style="width:100%;border-collapse:collapse"><tbody>${rows}${moreRow}</tbody></table>`;
   };
 
+  // ── Bandeau diagnostic par GPO ──
+  const renderDiagnostic = (group) => {
+    const links = group.links || [];
+    const linksHtml = links.length > 0
+      ? links.map(l => {
+          const ouParts = (l.ou||'').split(',').filter(p=>p.startsWith('OU=')).map(p=>p.slice(3)).reverse();
+          const ouLabel = ouParts.join(' › ') || l.ou || '(racine)';
+          const tags = [];
+          if (l.enforced) tags.push(`<span style="background:rgba(255,95,95,.15);color:var(--red);border-radius:3px;padding:0 5px;font-size:10px;font-weight:600">ENFORCED</span>`);
+          if (l.disabled) tags.push(`<span style="background:rgba(122,132,168,.15);color:var(--txt3);border-radius:3px;padding:0 5px;font-size:10px">lien désactivé</span>`);
+          return `<div style="display:flex;align-items:center;gap:5px">
+            <span style="color:var(--txt3);font-size:10px">⊢</span>
+            <span style="font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--txt2)">${_escHtml(ouLabel)}</span>
+            ${tags.join('')}
+          </div>`;
+        }).join('')
+      : `<span style="font-size:10px;color:var(--amber)">⚠ GPO non liée à aucune OU</span>`;
+
+    const score = group.score;
+    const scoreColor = score===null ? 'var(--txt3)' : score>=70 ? 'var(--green)' : score>=40 ? 'var(--amber)' : 'var(--red)';
+    const scoreBadge = group.is_disabled
+      ? `<span style="font-size:10px;color:var(--txt3);border:1px solid var(--border);border-radius:3px;padding:1px 5px">${group.disabled_label||'désactivée'}</span>`
+      : score !== null
+        ? `<span style="color:${scoreColor};font-size:10px;font-weight:600">Score ${score}/100</span>`
+        : '';
+
+    const critCount = (group.findings||[]).filter(f=>f.severity==='critical').length;
+    const critBadge = critCount > 0
+      ? `<span style="background:rgba(255,95,95,.12);color:var(--red);border-radius:3px;padding:1px 5px;font-size:10px">${critCount} critique${critCount>1?'s':''}</span>`
+      : '';
+
+    const types = [...new Set(group.items.map(i => i.type_icon + ' ' + i.type.split('—')[0].trim()))];
+    const typePills = types.slice(0,6).map(t =>
+      `<span style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:1px 5px;font-size:10px;color:var(--txt3)">${t}</span>`
+    ).join('');
+
+    return `<div style="padding:7px 14px;background:var(--surface2);border-top:1px solid var(--border);display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap">
+      <div style="min-width:140px"><div style="font-size:9px;color:var(--txt3);margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em">OU liées</div>${linksHtml}</div>
+      <div><div style="font-size:9px;color:var(--txt3);margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em">Types</div><div style="display:flex;flex-wrap:wrap;gap:3px">${typePills}</div></div>
+      <div style="margin-left:auto;display:flex;gap:5px;align-items:center">${scoreBadge}${critBadge}</div>
+    </div>`;
+  };
+
+  const allToks = [...rawTokens, ...rawTokens.flatMap(t=>[...(_synonymMap[t]||[])])];
+
   resultsDiv.innerHTML = gpoGroups.map(group => {
-    // En mode multi-token : séparer les résultats par token pour montrer
-    // "pourquoi cette GPO a matché chaque terme"
-    const bodyHtml = tokens.length > 1
-      ? tokens.map(t => {
-          const tItems = group.items.filter(i => i._matched.includes(t));
+    const bodyHtml = rawTokens.length > 1
+      ? rawTokens.map(t => {
+          const syns = [...(_synonymMap[t]||[])];
+          const tItems = group.items.filter(i => i.search_blob.includes(t) || syns.some(s => i.search_blob.includes(s)));
           if (!tItems.length) return '';
+          const synNote = syns.length > 0 && tItems.some(i => !i.search_blob.includes(t))
+            ? `<span style="color:var(--txt3);font-style:italic;font-size:10px;margin-left:4px">(via synonymes)</span>` : '';
           return `<div style="border-top:1px solid var(--border)">
-            <div style="padding:5px 12px;background:var(--surface2);font-size:11px;color:var(--txt3)">
-              <mark style="background:rgba(91,158,249,.2);color:var(--blue);border-radius:3px;padding:1px 6px;font-weight:600">${_escHtml(t)}</mark>
-              — ${tItems.length} entrée${tItems.length>1?'s':''}
+            <div style="padding:4px 12px;background:var(--surface2);font-size:11px;color:var(--txt3);display:flex;align-items:center;gap:5px">
+              <mark style="background:rgba(91,158,249,.2);color:var(--blue);border-radius:3px;padding:1px 5px;font-weight:600">${_escHtml(t)}</mark>
+              — ${tItems.length} entrée${tItems.length>1?'s':''}${synNote}
             </div>
             ${renderRows(tItems)}
           </div>`;
         }).join('')
       : `<div style="border-top:1px solid var(--border)">${renderRows(group.items)}</div>`;
 
+    const coveredBadges = rawTokens.map(t =>
+      `<span style="background:rgba(45,212,191,.12);color:var(--teal);border-radius:3px;padding:1px 5px;font-size:10px">✓ ${_escHtml(t)}</span>`
+    ).join('');
+
     return `
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:3px;margin-bottom:8px;overflow:hidden">
-        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface2);cursor:pointer"
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:3px;margin-bottom:10px;overflow:hidden">
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface2);cursor:pointer;border-bottom:1px solid var(--border)"
              onclick="showGPODetail('${group.guid}')">
           <span style="font-size:14px">📄</span>
-          <span style="font-size:13px;font-weight:600;flex:1">${_highlight(group.name, tokens)}</span>
+          <span style="font-size:13px;font-weight:600;flex:1">${_highlight(group.name, allToks)}</span>
+          <div style="display:flex;gap:4px">${coveredBadges}</div>
           <span style="font-size:11px;color:var(--txt3)">${group.items.length} entrée${group.items.length>1?'s':''}</span>
           <span style="font-size:11px;color:var(--blue)">Ouvrir →</span>
         </div>
+        ${renderDiagnostic(group)}
         ${bodyHtml}
       </div>`;
   }).join('');
