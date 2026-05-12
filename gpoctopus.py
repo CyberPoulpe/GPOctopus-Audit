@@ -2179,11 +2179,23 @@ class GPOCollector:
         wmi_filters = self._get_wmi_filters()
         gpos = []
         for entry in self.conn.entries:
-            guid = str(entry.cn) if entry.cn else ''
-            sysvol = str(entry.gPCFileSysPath) if entry.gPCFileSysPath else ''
+            # Utiliser entry_attributes_as_dict pour éviter LDAPCursorAttributeError
+            # sur les attributs absents (comportement de ldap3 selon la version)
+            attrs = entry.entry_attributes_as_dict
+
+            def _get(name, default=''):
+                val = attrs.get(name) or attrs.get(name.lower())
+                if not val:
+                    return default
+                v = val[0] if isinstance(val, list) else val
+                return str(v) if v is not None else default
+
+            guid   = _get('cn')
+            sysvol = _get('gPCFileSysPath')
             if not guid:
                 continue
-            wql_filter_dn = str(entry.gPCWQLFilter) if entry.gPCWQLFilter else ''
+
+            wql_filter_dn = _get('gPCWQLFilter')
             wmi_info = None
             if wql_filter_dn and wql_filter_dn not in ('', 'None', '[]'):
                 wmi_guid_m = re.search(r'\{([0-9A-Fa-f-]{36})\}', wql_filter_dn)
@@ -2193,18 +2205,19 @@ class GPOCollector:
                         'guid': wmi_guid, 'name': wmi_guid,
                         'query': wql_filter_dn, 'description': '',
                     })
+
             gpos.append({
-                'name': str(entry.displayName) if entry.displayName else f'GPO-{guid[:8]}',
-                'guid': guid,
+                'name':        _get('displayName') or f'GPO-{guid[:8]}',
+                'guid':        guid,
                 'sysvol_path': sysvol,
-                'version': str(entry.versionNumber) if entry.versionNumber else '0',
-                'flags': str(entry.flags) if entry.flags else '0',
-                'created': str(entry.whenCreated) if entry.whenCreated else '',
-                'changed': str(entry.whenChanged) if entry.whenChanged else '',
-                'links': [],
-                'settings': {},
+                'version':     _get('versionNumber', '0'),
+                'flags':       _get('flags', '0'),
+                'created':     _get('whenCreated'),
+                'changed':     _get('whenChanged'),
+                'links':       [],
+                'settings':    {},
                 'registry_entries': [],
-                'wmi_filter': wmi_info,
+                'wmi_filter':  wmi_info,
             })
         print(f"[+] {len(gpos)} GPO trouvées ({sum(1 for g in gpos if g['wmi_filter'])} avec filtre WMI)")
         return gpos
@@ -2217,11 +2230,17 @@ class GPOCollector:
             self.conn.search(search_base=wmi_dn, search_filter='(objectClass=msWMI-Som)',
                              search_scope=SUBTREE, attributes=['cn','msWMI-Name','msWMI-Parm1','msWMI-Parm2'])
             for entry in self.conn.entries:
-                guid = str(entry.cn) if entry.cn else ''
+                attrs = entry.entry_attributes_as_dict
+                def _g(k, d=''):
+                    v = attrs.get(k) or attrs.get(k.lower())
+                    if not v: return d
+                    x = v[0] if isinstance(v, list) else v
+                    return str(x) if x else d
+                guid = _g('cn')
                 if not guid: continue
-                name  = str(getattr(entry, 'msWMI-Name',  '') or '')
-                desc  = str(getattr(entry, 'msWMI-Parm1', '') or '')
-                query = str(getattr(entry, 'msWMI-Parm2', '') or '')
+                name  = _g('msWMI-Name')
+                desc  = _g('msWMI-Parm1')
+                query = _g('msWMI-Parm2')
                 wql_m = re.search(r'SELECT\s+.+', query, re.IGNORECASE | re.DOTALL)
                 clean = wql_m.group(0).strip() if wql_m else query[:200]
                 filters['{' + guid.strip('{}').upper() + '}'] = {
@@ -2247,8 +2266,16 @@ class GPOCollector:
             re.IGNORECASE
         )
         for entry in self.conn.entries:
-            gp_link = str(entry.gPLink)
-            ou_dn = str(entry.distinguishedName)
+            attrs = entry.entry_attributes_as_dict
+            def _g(k, d=''):
+                v = attrs.get(k) or attrs.get(k.lower())
+                if not v: return d
+                x = v[0] if isinstance(v, list) else v
+                return str(x) if x else d
+            gp_link = _g('gPLink')
+            ou_dn   = _g('distinguishedName')
+            if not gp_link or not ou_dn:
+                continue
             for m in GPLINK_RE.finditer(gp_link):
                 guid = '{' + m.group(1).upper() + '}'
                 flag = int(m.group(2))
