@@ -1850,61 +1850,85 @@ def parse_gpttmpl(content: str) -> dict:
 
 
 def parse_registry_pol(data: bytes) -> list:
-    """Parse Registry.pol → liste de (key_lower, value_name_lower, type, parsed_value)"""
+    """Parse Registry.pol → liste de (key_lower, value_name_lower, type, parsed_value)
+    Supporte REG_DWORD, REG_SZ, REG_EXPAND_SZ, REG_MULTI_SZ, REG_BINARY.
+    Robuste aux formats exotiques — erreurs silencieuses.
+    """
     entries = []
     if len(data) < 8 or data[:4] != b'PReg':
         return entries
 
     offset = 8
     while offset < len(data) - 4:
-        if data[offset:offset+2] != b'[\x00':
-            offset += 2
-            continue
-        offset += 2
-
-        def read_wstr(pos):
-            end = pos
-            while end + 1 < len(data):
-                if data[end] == 0 and data[end+1] == 0:
-                    break
-                end += 2
-            return data[pos:end].decode('utf-16-le', errors='replace'), end + 2
-
-        key, offset = read_wstr(offset)
-        if offset >= len(data) or data[offset:offset+2] != b';\x00':
-            continue
-        offset += 2
-        value_name, offset = read_wstr(offset)
-        if offset >= len(data) or data[offset:offset+2] != b';\x00':
-            continue
-        offset += 2
-        if offset + 4 > len(data):
-            break
-        reg_type = struct.unpack_from('<I', data, offset)[0]
-        offset += 4
-        if offset >= len(data) or data[offset:offset+2] != b';\x00':
-            continue
-        offset += 2
-        if offset + 4 > len(data):
-            break
-        data_size = struct.unpack_from('<I', data, offset)[0]
-        offset += 4
-        if offset >= len(data) or data[offset:offset+2] != b';\x00':
-            continue
-        offset += 2
-        val_data = data[offset:offset+data_size]
-        offset += data_size
-        if offset < len(data) and data[offset:offset+2] == b']\x00':
+        try:
+            if data[offset:offset+2] != b'[\x00':
+                offset += 2
+                continue
             offset += 2
 
-        if reg_type == 4 and len(val_data) >= 4:
-            parsed_val = struct.unpack_from('<I', val_data)[0]
-        elif reg_type == 1:
-            parsed_val = val_data.decode('utf-16-le', errors='replace').rstrip('\x00')
-        else:
-            parsed_val = val_data.hex()
+            def read_wstr(pos):
+                end = pos
+                while end + 1 < len(data):
+                    if data[end] == 0 and data[end+1] == 0:
+                        break
+                    end += 2
+                try:
+                    s = data[pos:end].decode('utf-16-le', errors='replace')
+                except Exception:
+                    s = ''
+                return s, end + 2
 
-        entries.append((key.lower(), value_name.lower(), reg_type, parsed_val))
+            key, offset = read_wstr(offset)
+            if offset >= len(data) or data[offset:offset+2] != b';\x00':
+                continue
+            offset += 2
+            value_name, offset = read_wstr(offset)
+            if offset >= len(data) or data[offset:offset+2] != b';\x00':
+                continue
+            offset += 2
+            if offset + 4 > len(data):
+                break
+            reg_type = struct.unpack_from('<I', data, offset)[0]
+            offset += 4
+            if offset >= len(data) or data[offset:offset+2] != b';\x00':
+                continue
+            offset += 2
+            if offset + 4 > len(data):
+                break
+            data_size = struct.unpack_from('<I', data, offset)[0]
+            offset += 4
+            if offset >= len(data) or data[offset:offset+2] != b';\x00':
+                continue
+            offset += 2
+            val_data = data[offset:offset+data_size]
+            offset += data_size
+            if offset < len(data) and data[offset:offset+2] == b']\x00':
+                offset += 2
+
+            # Parser la valeur selon le type
+            try:
+                if reg_type == 4 and len(val_data) >= 4:       # REG_DWORD
+                    parsed_val = struct.unpack_from('<I', val_data)[0]
+                elif reg_type == 5 and len(val_data) >= 4:      # REG_DWORD_BIG_ENDIAN
+                    parsed_val = struct.unpack_from('>I', val_data)[0]
+                elif reg_type in (1, 2) and val_data:           # REG_SZ, REG_EXPAND_SZ
+                    parsed_val = val_data.decode('utf-16-le', errors='replace').rstrip('\x00')
+                elif reg_type == 7 and val_data:                # REG_MULTI_SZ
+                    parts = val_data.decode('utf-16-le', errors='replace').rstrip('\x00')
+                    parsed_val = ' | '.join(p for p in parts.split('\x00') if p)
+                elif reg_type == 11 and len(val_data) >= 8:     # REG_QWORD
+                    parsed_val = struct.unpack_from('<Q', val_data)[0]
+                else:                                            # REG_BINARY et autres
+                    parsed_val = val_data.hex()
+            except Exception:
+                parsed_val = val_data.hex() if val_data else ''
+
+            entries.append((key.lower(), value_name.lower(), reg_type, parsed_val))
+
+        except Exception:
+            # Entrée corrompue — continuer avec la suivante
+            offset += 2
+            continue
 
     return entries
 
@@ -2687,6 +2711,12 @@ class GPOCollector:
     def get_gpos_from_ldap(self):
         gpo_dn = f"CN=Policies,CN=System,{self.base_dn}"
 
+        # Collecter aussi les Fine-Grained Password Policies (PSO)
+        # pour annoter les findings PWD et éviter les faux positifs
+        self._pso_list = self._get_pso_list()
+        if self._pso_list:
+            print(f"[+] {len(self._pso_list)} Fine-Grained Password Policies (PSO) détectées")
+
         # Essai 1 : recherche avec paging (nécessaire si > ~100 GPO)
         # Essai 2 : sans paging si le DC ne le supporte pas
         entries = []
@@ -2698,7 +2728,7 @@ class GPOCollector:
                     search_scope=SUBTREE,
                     attributes=['displayName', 'cn', 'gPCFileSysPath',
                                 'versionNumber', 'flags', 'whenCreated', 'whenChanged',
-                                'gPCWQLFilter'],
+                                'gPCWQLFilter', 'nTSecurityDescriptor'],
                     paged_size=paged_size if paged_size else None,
                     paged_cookie=None,
                 )
@@ -2758,21 +2788,98 @@ class GPOCollector:
                         'guid': wk, 'name': wk, 'query': wql_dn, 'description': '',
                     })
 
+            # Security Filtering — extraire les groupes/comptes autorisés
+            # depuis le nTSecurityDescriptor (ACE avec droit Apply Group Policy)
+            security_filter = self._parse_security_filter(attrs)
+
             gpos.append({
-                'name':        _get('displayName') or f'GPO-{guid[:8]}',
-                'guid':        guid,
-                'sysvol_path': sysvol,
-                'version':     _get('versionNumber', '0'),
-                'flags':       _get('flags', '0'),
-                'created':     _get('whenCreated'),
-                'changed':     _get('whenChanged'),
-                'links':       [],
-                'settings':    {},
+                'name':            _get('displayName') or f'GPO-{guid[:8]}',
+                'guid':            guid,
+                'sysvol_path':     sysvol,
+                'version':         _get('versionNumber', '0'),
+                'flags':           _get('flags', '0'),
+                'created':         _get('whenCreated'),
+                'changed':         _get('whenChanged'),
+                'links':           [],
+                'settings':        {},
                 'registry_entries': [],
-                'wmi_filter':  wmi_info,
+                'wmi_filter':      wmi_info,
+                'security_filter': security_filter,
             })
         print(f"[+] {len(gpos)} GPO trouvées ({sum(1 for g in gpos if g['wmi_filter'])} avec filtre WMI)")
         return gpos
+
+    def _get_pso_list(self) -> list:
+        """Récupère les Fine-Grained Password Policies (msDS-PasswordSettings)."""
+        psos = []
+        try:
+            pso_dn = f"CN=Password Settings Container,CN=System,{self.base_dn}"
+            self.conn.search(
+                search_base=pso_dn,
+                search_filter='(objectClass=msDS-PasswordSettings)',
+                search_scope=SUBTREE,
+                attributes=['cn', 'msDS-MinimumPasswordLength', 'msDS-PasswordHistoryLength',
+                            'msDS-PasswordComplexityEnabled', 'msDS-MaximumPasswordAge',
+                            'msDS-LockoutThreshold', 'msDS-PasswordSettingsPrecedence',
+                            'msDS-PSOAppliesTo'],
+            )
+            for entry in self.conn.entries:
+                attrs = entry.entry_attributes_as_dict
+                def _g(k, d=''):
+                    v = attrs.get(k) or attrs.get(k.lower())
+                    if not v: return d
+                    x = v[0] if isinstance(v, list) else v
+                    return str(x) if x else d
+                applies_to = attrs.get('msDS-PSOAppliesTo', [])
+                if isinstance(applies_to, list):
+                    applies_to = [str(x) for x in applies_to]
+                psos.append({
+                    'name':        _g('cn'),
+                    'min_length':  _g('msDS-MinimumPasswordLength'),
+                    'history':     _g('msDS-PasswordHistoryLength'),
+                    'complexity':  _g('msDS-PasswordComplexityEnabled'),
+                    'max_age':     _g('msDS-MaximumPasswordAge'),
+                    'lockout':     _g('msDS-LockoutThreshold'),
+                    'precedence':  _g('msDS-PasswordSettingsPrecedence'),
+                    'applies_to':  applies_to,
+                })
+        except Exception:
+            pass  # CN=Password Settings Container absent si pas de PSO
+        return psos
+
+    def _parse_security_filter(self, attrs: dict) -> list:
+        """Extrait le Security Filtering d'une GPO depuis nTSecurityDescriptor.
+        Retourne la liste des SID avec droit 'Apply Group Policy' (hors Authenticated Users).
+        """
+        APPLY_GP_GUID = 'edacfd8f-ffb3-11d1-b41d-00a0c968f939'
+        AUTHENTICATED_USERS = 'S-1-5-11'
+        filters = []
+        try:
+            raw_sd = attrs.get('nTSecurityDescriptor')
+            if not raw_sd:
+                return []
+            try:
+                from impacket.ldap.ldaptypes import SR_SECURITY_DESCRIPTOR
+                sd_bytes = raw_sd[0] if isinstance(raw_sd, list) else raw_sd
+                if isinstance(sd_bytes, str):
+                    return []
+                sd = SR_SECURITY_DESCRIPTOR(data=bytes(sd_bytes))
+                if sd['Dacl']:
+                    for ace in sd['Dacl']['Data']:
+                        if ace['AceType'] == 5:  # ACCESS_ALLOWED_OBJECT_ACE
+                            try:
+                                obj_guid = str(ace['Ace']['ObjectType']).replace('-','').lower()
+                                if APPLY_GP_GUID.replace('-','') in obj_guid:
+                                    sid = ace['Ace']['Sid'].formatCanonical()
+                                    if AUTHENTICATED_USERS not in sid:
+                                        filters.append(sid)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return filters
 
     def _get_wmi_filters(self) -> dict:
         """Récupère les filtres WMI (msWMI-Som) depuis l'AD."""
@@ -2810,36 +2917,46 @@ class GPOCollector:
     def get_gpo_links(self):
         # Recherche avec paging pour les grands domaines (beaucoup d'OU)
         entries = []
-        for paged_size in [500, 0]:
-            try:
-                self.conn.search(
-                    search_base=self.base_dn,
-                    search_filter='(gPLink=*)',
-                    search_scope=SUBTREE,
-                    attributes=['distinguishedName', 'gPLink'],
-                    paged_size=paged_size if paged_size else None,
-                )
-                entries = list(self.conn.entries)
-                if paged_size:
-                    while True:
-                        cookie = self.conn.result.get('controls', {}).get(
-                            '1.2.840.113556.1.4.319', {}).get('value', {}).get('cookie')
-                        if not cookie:
-                            break
-                        self.conn.search(
-                            search_base=self.base_dn,
-                            search_filter='(gPLink=*)',
-                            search_scope=SUBTREE,
-                            attributes=['distinguishedName', 'gPLink'],
-                            paged_size=paged_size,
-                            paged_cookie=cookie,
-                        )
-                        entries += list(self.conn.entries)
-                break
-            except Exception:
-                if paged_size == 0:
+        # Chercher les liens GPO dans le domaine ET dans les sites AD
+        search_bases = [self.base_dn]
+        # Ajouter la base de configuration pour les sites réseau
+        try:
+            config_dn = f"CN=Sites,CN=Configuration,{self.base_dn}"
+            search_bases.append(config_dn)
+        except Exception:
+            pass
+
+        for search_base in search_bases:
+            for paged_size in [500, 0]:
+                try:
+                    self.conn.search(
+                        search_base=search_base,
+                        search_filter='(gPLink=*)',
+                        search_scope=SUBTREE,
+                        attributes=['distinguishedName', 'gPLink', 'name'],
+                        paged_size=paged_size if paged_size else None,
+                    )
+                    entries += list(self.conn.entries)
+                    if paged_size:
+                        while True:
+                            cookie = self.conn.result.get('controls', {}).get(
+                                '1.2.840.113556.1.4.319', {}).get('value', {}).get('cookie')
+                            if not cookie:
+                                break
+                            self.conn.search(
+                                search_base=search_base,
+                                search_filter='(gPLink=*)',
+                                search_scope=SUBTREE,
+                                attributes=['distinguishedName', 'gPLink', 'name'],
+                                paged_size=paged_size,
+                                paged_cookie=cookie,
+                            )
+                            entries += list(self.conn.entries)
                     break
-                continue
+                except Exception:
+                    if paged_size == 0:
+                        break
+                    continue
 
         links = {}
         # Regex robuste : UUID format standard dans un bloc [LDAP://...;flag]
@@ -2875,34 +2992,48 @@ class GPOCollector:
             smb = SMBConnection(self.dc, self.dc, timeout=10)
             smb.login(self.username, self.password, self.domain)
             self._smb = smb
+            self._smb_errors = 0
+
             # Détecter le nom exact du partage SYSVOL
             all_shares = [s['shi1_netname'].rstrip('\x00') for s in smb.listShares()]
             sysvol_shares = [s for s in all_shares if s.upper() == 'SYSVOL']
             self._sysvol_share = sysvol_shares[0] if sysvol_shares else 'SYSVOL'
             print(f"    [+] SMB connecté — partages : {all_shares}")
 
-            # Test de lecture immédiat sur la Default Domain Policy (toujours présente)
-            test_path = f"\\{self.domain}\\Policies\\{{31B2F340-016D-11D2-945F-00C04FB984F9}}\\GPT.INI"
-            buf = []
-            try:
-                smb.getFile(self._sysvol_share, test_path, buf.append)
-                print(f"    [+] Lecture SYSVOL OK ({len(b''.join(buf))} octets)")
-            except Exception as e_test:
-                # Essai avec chemin court sans domaine
-                test_path2 = f"\\Policies\\{{31B2F340-016D-11D2-945F-00C04FB984F9}}\\GPT.INI"
-                buf2 = []
+            # Détecter le préfixe de chemin SYSVOL sans dépendre d'un GUID spécifique.
+            # On cherche le dossier Policies sous différents préfixes possibles.
+            # Certains AD exposent \\domaine\SYSVOL\domaine\Policies
+            # D'autres \\domaine\SYSVOL\Policies directement
+            # D'autres encore avec le nom NetBIOS au lieu du FQDN
+            netbios = self.domain.split('.')[0].upper()
+            prefixes_to_try = list(dict.fromkeys([
+                self.domain,           # FQDN : sdis25.lan
+                netbios,               # NetBIOS : SDIS25
+                self.domain.upper(),
+                self.domain.lower(),
+                '',                    # pas de préfixe
+            ]))
+
+            self._smb_path_prefix = self.domain  # défaut
+            for prefix in prefixes_to_try:
+                test_path = (f"\\{prefix}\\Policies\\" if prefix else "\\Policies\\") + '*'
                 try:
-                    smb.getFile(self._sysvol_share, test_path2, buf2.append)
-                    print(f"    [+] Lecture SYSVOL OK (chemin court, {len(b''.join(buf2))} octets)")
-                    self._smb_path_prefix = ''  # pas de préfixe domaine
+                    smb.listPath(self._sysvol_share, test_path)
+                    self._smb_path_prefix = prefix
+                    label = prefix if prefix else '(aucun)'
+                    print(f"    [+] Préfixe SYSVOL détecté : '{label}'")
+                    break
                 except Exception:
-                    print(f"    [!] Lecture SYSVOL échoue : {e_test}")
-                    print(f"    [!] Chemin testé : {test_path}")
+                    continue
+            else:
+                print(f"    [!] Préfixe SYSVOL non détecté — utilisation de '{self.domain}'")
 
             return True
         except Exception as e:
             self._smb = None
             self._sysvol_share = 'SYSVOL'
+            self._smb_path_prefix = self.domain
+            self._smb_errors = 0
             print(f"    [!] SMB direct indisponible : {e}")
             return False
 
@@ -2991,13 +3122,17 @@ class GPOCollector:
             return
 
         def smb_rel(*parts):
-            """Chemin relatif impacket : \\domaine\\Policies\\{GUID}\\..."""
+            """Chemin relatif impacket en tenant compte du préfixe détecté."""
             try:
                 pol_i = next(i for i,s in enumerate(segs_base) if s.lower() == 'policies')
                 after = segs_base[pol_i+1:] + list(parts)
             except StopIteration:
                 after = segs_base + list(parts)
-            return '\\' + self.domain + '\\Policies\\' + '\\'.join(after)
+            prefix = getattr(self, '_smb_path_prefix', self.domain)
+            if prefix:
+                return '\\' + prefix + '\\Policies\\' + '\\'.join(after)
+            else:
+                return '\\Policies\\' + '\\'.join(after)
 
         def rb(*parts):
             """Lit un fichier en bytes via SMB."""
@@ -3226,6 +3361,9 @@ class GPOCollector:
                 self._smb.logoff()
             except Exception:
                 pass
+        # Attacher les PSO aux données pour analyze_gpos
+        for gpo in gpos:
+            gpo['_pso_list'] = getattr(self, '_pso_list', [])
         return gpos
 
 
@@ -3842,10 +3980,24 @@ def analyze_gpos(gpos: list) -> dict:
     rsop_settings, rsop_reg_list, rsop_registry_xml = build_rsop(gpos)
     rsop_registry = {(e[0], e[1]): e[3] for e in rsop_reg_list}
 
+    # Récupérer les PSO depuis les GPO (injectées par collect_all)
+    pso_list = []
+    for gpo in gpos:
+        if gpo.get('_pso_list'):
+            pso_list = gpo['_pso_list']
+            break
+
     global_findings = []
     for rule in AUDIT_RULES:
         finding = evaluate_rule_on_rsop(rule, rsop_settings, rsop_registry)
         if finding:
+            # Annoter les findings de mots de passe si des PSO existent
+            if pso_list and rule.get('category') == 'Mots de passe':
+                finding['pso_note'] = (
+                    f"⚠ {len(pso_list)} Fine-Grained Password Policy (PSO) détectée(s) — "
+                    f"ce finding peut ne pas s'appliquer aux comptes couverts par une PSO : "
+                    + ', '.join(p['name'] for p in pso_list[:3])
+                )
             global_findings.append(finding)
 
     # Évaluer les règles sur les [Registry Values] du GptTmpl.inf
@@ -3922,6 +4074,29 @@ def analyze_gpos(gpos: list) -> dict:
             if f:
                 per_gpo_findings.append(f)
 
+        # Pénaliser aussi les clés ADMX dangereuses détectées dans cette GPO
+        for r in gpo.get('registry_admx', []):
+            if r.get('alert') and 'CRITIQUE' in r.get('alert', ''):
+                per_gpo_findings.append({
+                    'rule_id':    f"ADMX-{r.get('name','').upper()[:12]}",
+                    'title':      r.get('label', r.get('name', '')),
+                    'severity':   'critical',
+                    'ref':        'Paramètre ADMX',
+                    'category':   r.get('category', 'Registre'),
+                    'remediation':f"Valeur détectée : {r.get('value','')} — {r.get('hint','')}",
+                    'detail':     r.get('alert', ''),
+                })
+            elif r.get('alert'):
+                per_gpo_findings.append({
+                    'rule_id':    f"ADMX-{r.get('name','').upper()[:12]}",
+                    'title':      r.get('label', r.get('name', '')),
+                    'severity':   'warning',
+                    'ref':        'Paramètre ADMX',
+                    'category':   r.get('category', 'Registre'),
+                    'remediation':f"Valeur : {r.get('value','')} — {r.get('hint','')}",
+                    'detail':     r.get('alert', ''),
+                })
+
         score = 100
         for f in per_gpo_findings:
             score -= {'critical': 25, 'warning': 10, 'info': 3}.get(f['severity'], 0)
@@ -3932,18 +4107,19 @@ def analyze_gpos(gpos: list) -> dict:
         has_content = any(s['params'] for s in content_sections)
 
         gpo_reports.append({
-            'name':        gpo['name'],
-            'guid':        gpo['guid'],
-            'links':       gpo['links'],
-            'link_count':  len(gpo['links']),
-            'flags':       gpo.get('flags', '0'),
-            'created':     gpo.get('created', ''),
-            'changed':     gpo.get('changed', ''),
-            'findings':    per_gpo_findings,
-            'score':       score,
-            'is_orphan':   not gpo['links'],
-            'has_content': has_content,
-            'wmi_filter':  gpo.get('wmi_filter'),  # filtre WMI éventuel
+            'name':            gpo['name'],
+            'guid':            gpo['guid'],
+            'links':           gpo['links'],
+            'link_count':      len(gpo['links']),
+            'flags':           gpo.get('flags', '0'),
+            'created':         gpo.get('created', ''),
+            'changed':         gpo.get('changed', ''),
+            'findings':        per_gpo_findings,
+            'score':           score,
+            'is_orphan':       not gpo['links'],
+            'has_content':     has_content,
+            'wmi_filter':      gpo.get('wmi_filter'),
+            'security_filter': gpo.get('security_filter', []),
         })
         # Index de contenu — exclure les sections de registre brutes (trop volumineuses)
         # On garde uniquement les sections décodées/lisibles
@@ -4901,7 +5077,9 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
           </div>
           <div class="fc-body">
             <div class="fc-detail">{{ f.detail }}</div>
+            <div class="fc-ref">{{ f.ref }}</div>
             <div class="fc-reco">✅ {{ f.remediation }}</div>
+            {% if f.get('pso_note') %}<div style="margin-top:6px;font-size:11px;padding:6px 10px;background:var(--amber-bg);border-radius:4px;color:var(--amber)">⚠ {{ f.pso_note }}</div>{% endif %}
             {% if f.source_gpos %}<div class="fc-sources">GPO source : {% for sg in f.source_gpos %}<span class="fc-gpo-link" onclick="openGPODetail('{{ sg.guid }}')">{{ sg.name }}</span>{% endfor %}</div>{% endif %}
             {% if f.action_label %}<div style="margin-top:6px;font-size:11px;padding:4px 8px;background:var(--surface2);border-radius:3px;color:var(--txt2)">🔧 {{ f.action_label }}</div>{% endif %}
             <div class="explain-zone" id="ez-c-{{ f.rule_id }}"></div>
@@ -5661,6 +5839,10 @@ function renderGPODetail(guid){
       <div style="font-size:11px;color:var(--txt2)"><strong>Nom :</strong> ${_escHtml(g.wmi_filter.name||'')}${g.wmi_filter.description?` — ${_escHtml(g.wmi_filter.description)}`:''}</div>
       <div class="wmi-query">${_escHtml(g.wmi_filter.query||'')}</div>
       <div style="font-size:10px;color:var(--amber);margin-top:4px">Si la GPO ne s'applique pas sur un poste, testez : <code>Get-WmiObject -Query "..."</code></div>
+    </div>`:''}
+    ${g.security_filter&&g.security_filter.length>0?`<div style="margin:10px 0 0;padding:10px 14px;background:var(--blue-bg);border:1px solid rgba(74,127,212,.25);border-radius:6px">
+      <div style="font-size:12px;font-weight:600;color:var(--blue);margin-bottom:5px">🔒 Security Filtering — s'applique uniquement à :</div>
+      <div style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--txt2)">${g.security_filter.map(s=>_escHtml(s)).join('<br>')}</div>
     </div>`:''}`;
 
   let body='';
@@ -6429,7 +6611,40 @@ def run_wizard():
     dc      = ask("  DC (IP ou FQDN)", default=saved.get("dc", ""))
     domain  = ask("  Domaine", default=saved.get("domain", ""))
     user    = ask("  Utilisateur", default=saved.get("user", ""))
-    password = ask("  Mot de passe", secret=True)
+
+    # Proposer de charger un mot de passe sauvegardé
+    cred_file = Path(__file__).parent / ".gpoctopus_creds"
+    password = ""
+    if cred_file.exists():
+        use_saved_pw = ask_yn("  Utiliser le mot de passe sauvegardé ?", default="o")
+        if use_saved_pw:
+            try:
+                import base64, hashlib, hmac as _hmac
+                with open(cred_file, 'rb') as cf:
+                    raw = cf.read()
+                # XOR simple avec dérivé du hostname
+                import socket
+                key = hashlib.sha256(socket.gethostname().encode()).digest()
+                dec = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
+                password = dec.decode('utf-8')
+                ok("Mot de passe chargé")
+            except Exception:
+                warn("Impossible de lire le mot de passe sauvegardé")
+                password = ""
+
+    if not password:
+        password = ask("  Mot de passe", secret=True)
+        if password and ask_yn("  Sauvegarder le mot de passe (chiffré localement) ?", default="n"):
+            try:
+                import base64, hashlib, socket
+                key = hashlib.sha256(socket.gethostname().encode()).digest()
+                enc = bytes(b ^ key[i % len(key)] for i, b in enumerate(password.encode('utf-8')))
+                with open(cred_file, 'wb') as cf:
+                    cf.write(enc)
+                cred_file.chmod(0o600)
+                ok("Mot de passe sauvegardé (chiffré par dérivation du hostname)")
+            except Exception as e:
+                warn(f"Impossible de sauvegarder : {e}")
 
     if not all([dc, domain, user, password]):
         err("Tous les champs sont requis.")
