@@ -239,7 +239,7 @@ AUDIT_RULES = [
         "severity": "warning",
         "ref": "CIS 17.5.1 · ANSSI R-09",
         "category": "Audit",
-        "check_key": "auditlogonevents",        # tout en minuscules
+        "check_key": "auditlogonevents",        # tout en minuscules — parse_gpttmpl normalise en lowercase
         "section": "event_audit",
         "threshold": 0,
         "operator": "eq",
@@ -408,136 +408,7 @@ AUDIT_RULES = [
         "reg_expected": 1,
         "remediation": "Activer via GPO Device Guard. Requis : UEFI, Secure Boot, TPM 2.0, Win10/11 64-bit.",
     },
-    # ── Kerberos ──
-    {
-        "id": "KRB-001",
-        "title": "Durée de vie des tickets Kerberos trop longue (> 10h)",
-        "severity": "warning",
-        "ref": "CIS 2.3.9.1 · ANSSI R-06",
-        "category": "Kerberos",
-        "check_key": "maxtickerage",
-        "section": "kerberos_policy",
-        "threshold": 10,
-        "operator": "gt",
-        "remediation": "MaxTicketAge ≤ 10h. Un ticket long-lived donne plus de temps à un attaquant pour l'exploiter (Pass-the-Ticket).",
-    },
-    {
-        "id": "KRB-002",
-        "title": "Tolérance d'horloge Kerberos trop élevée (> 5 min)",
-        "severity": "warning",
-        "ref": "CIS 2.3.9.3 · ANSSI R-06",
-        "category": "Kerberos",
-        "check_key": "maxclockskew",
-        "section": "kerberos_policy",
-        "threshold": 5,
-        "operator": "gt",
-        "remediation": "MaxClockSkew ≤ 5 minutes. Une tolérance excessive facilite les attaques par replay de tickets.",
-    },
-    {
-        "id": "KRB-003",
-        "title": "Renouvellement des tickets Kerberos trop long (> 7 jours)",
-        "severity": "info",
-        "ref": "CIS 2.3.9.2 · ANSSI R-06",
-        "category": "Kerberos",
-        "check_key": "maxrenewage",
-        "section": "kerberos_policy",
-        "threshold": 7,
-        "operator": "gt",
-        "remediation": "MaxRenewAge ≤ 7 jours. Limite la durée pendant laquelle un ticket volé peut être renouvelé.",
-    },
 ]
-
-# ─── Règles sur les [Privilege Rights] du GptTmpl.inf ───────────────────────
-AUDIT_RULES_PRIVRIGHTS = [
-    {
-        "id": "PRIV-R001",
-        "title": "SeDebugPrivilege accordé à des comptes non-Administrateurs",
-        "severity": "critical",
-        "ref": "CIS 2.2.15 · ANSSI R-38",
-        "category": "Droits & Privilèges",
-        "right_key": "sedebugprivilege",
-        "allowed_groups": {"*s-1-5-32-544"},
-        "remediation": "SeDebugPrivilege = Administrators seulement. Permet de lire la mémoire de tout processus — Mimikatz l'utilise pour extraire les credentials de lsass.",
-    },
-    {
-        "id": "PRIV-R002",
-        "title": "SeTcbPrivilege (Act as part of OS) accordé",
-        "severity": "critical",
-        "ref": "CIS 2.2.11 · ANSSI R-38",
-        "category": "Droits & Privilèges",
-        "right_key": "setcbprivilege",
-        "empty_only": True,
-        "remediation": "SeTcbPrivilege doit être vide. Ce droit permet à un processus d'agir comme le système d'exploitation — escalade totale garantie.",
-    },
-    {
-        "id": "PRIV-R003",
-        "title": "SeTakeOwnershipPrivilege accordé au-delà des Admins",
-        "severity": "warning",
-        "ref": "CIS 2.2.48 · ANSSI R-38",
-        "category": "Droits & Privilèges",
-        "right_key": "setakeownershipprivilege",
-        "allowed_groups": {"*s-1-5-32-544"},
-        "remediation": "SeTakeOwnership = Administrators seulement. Contourne les ACL sur n'importe quel objet.",
-    },
-    {
-        "id": "PRIV-R004",
-        "title": "SeBackupPrivilege accordé au-delà des Admins/Backup Operators",
-        "severity": "warning",
-        "ref": "CIS 2.2.10 · ANSSI R-38",
-        "category": "Droits & Privilèges",
-        "right_key": "sebackupprivilege",
-        "allowed_groups": {"*s-1-5-32-544", "*s-1-5-32-551"},
-        "remediation": "SeBackupPrivilege = Administrators + Backup Operators. Permet de lire tout fichier indépendamment des ACL — exfiltration ruche SAM.",
-    },
-    {
-        "id": "PRIV-R005",
-        "title": "SeLoadDriverPrivilege accordé au-delà des Admins",
-        "severity": "critical",
-        "ref": "CIS 2.2.30 · ANSSI R-38",
-        "category": "Droits & Privilèges",
-        "right_key": "seloaddriverprivilege",
-        "allowed_groups": {"*s-1-5-32-544"},
-        "remediation": "SeLoadDriverPrivilege = Administrators seulement. Charger un driver malveillant = contrôle total du noyau, contournement de tout EDR.",
-    },
-]
-
-
-def evaluate_privright_rules(privright_settings: dict) -> list:
-    """Évalue les règles Privilege Rights depuis [Privilege Rights] de GptTmpl.inf."""
-    findings = []
-    if not privright_settings:
-        return findings
-    for rule in AUDIT_RULES_PRIVRIGHTS:
-        key = rule["right_key"].lower()
-        raw = privright_settings.get(key)
-        if raw is None:
-            continue
-        assigned = {v.strip().lower() for v in raw.split(',') if v.strip()}
-        violated = False
-        detail = f"Droit accordé à : {raw}"
-        if rule.get("empty_only"):
-            if assigned:
-                violated = True
-                detail = f"Droit non vide — accordé à : {raw}"
-        elif "allowed_groups" in rule:
-            allowed = {g.lower() for g in rule["allowed_groups"]}
-            extra = assigned - allowed
-            if extra:
-                violated = True
-                detail = f"Groupes non autorisés : {', '.join(sorted(extra))}"
-        if violated:
-            findings.append({
-                "rule_id":    rule["id"],
-                "title":      rule["title"],
-                "severity":   rule["severity"],
-                "ref":        rule["ref"],
-                "category":   rule["category"],
-                "remediation":rule["remediation"],
-                "detail":     detail,
-                "not_configured": False,
-            })
-    return findings
-
 
 # ─── Règles sur les [Registry Values] du GptTmpl.inf ────────────────────────
 # Format valeur : "type,valeur" ex: "4,1" = REG_DWORD valeur 1
@@ -646,9 +517,8 @@ AUDIT_RULES_REGVAL = [
         "ref": "MS KB3033929 · ANSSI R-08",
         "category": "Services & Composants système",
         "regval_key": "machine\\system\\currentcontrolset\\control\\lsa\\runasppl",
-        "bad_val": "4,1",
-        "operator": "ne",
-        "remediation": "RunAsPPL = 1 (REG_DWORD). Protège lsass.exe comme processus protégé — Mimikatz ne peut plus lire les credentials en mémoire même avec les droits admin locaux. Requis : Secure Boot activé.",
+        "bad_val": "4,0",
+        "remediation": "RunAsPPL = 1. Protège lsass.exe comme processus protégé — Mimikatz ne peut plus lire les credentials en mémoire même avec les droits admin locaux. Requis : Secure Boot activé.",
     },
 
     # ── Mots de passe complémentaires ──
@@ -835,6 +705,98 @@ AUDIT_RULES_REGISTRY_XML = [
         "remediation": "EnableScriptBlockLogging = 1. Journalise tout le code PowerShell exécuté (Event ID 4104). Indispensable pour détecter les attaques PowerShell.",
     },
 ]
+
+
+# ─── Règles sur les [Privilege Rights] du GptTmpl.inf ───────────────────────
+AUDIT_RULES_PRIVRIGHTS = [
+    {
+        "id": "PRIV-R001",
+        "title": "SeDebugPrivilege accordé à des comptes non-Administrateurs",
+        "severity": "critical",
+        "ref": "CIS 2.2.15 · ANSSI R-38",
+        "category": "Droits & Privilèges",
+        "right_key": "sedebugprivilege",
+        "allowed_groups": {"*s-1-5-32-544"},
+        "remediation": "SeDebugPrivilege = Administrators seulement. Permet de lire la mémoire de tout processus — Mimikatz l'utilise pour extraire les credentials de lsass.",
+    },
+    {
+        "id": "PRIV-R002",
+        "title": "SeTcbPrivilege (Act as part of OS) accordé",
+        "severity": "critical",
+        "ref": "CIS 2.2.11 · ANSSI R-38",
+        "category": "Droits & Privilèges",
+        "right_key": "setcbprivilege",
+        "empty_only": True,
+        "remediation": "SeTcbPrivilege doit être vide. Ce droit permet à un processus d'agir comme le système d'exploitation — escalade totale garantie.",
+    },
+    {
+        "id": "PRIV-R003",
+        "title": "SeTakeOwnershipPrivilege accordé au-delà des Admins",
+        "severity": "warning",
+        "ref": "CIS 2.2.48 · ANSSI R-38",
+        "category": "Droits & Privilèges",
+        "right_key": "setakeownershipprivilege",
+        "allowed_groups": {"*s-1-5-32-544"},
+        "remediation": "SeTakeOwnership = Administrators seulement. Contourne les ACL sur n'importe quel objet.",
+    },
+    {
+        "id": "PRIV-R004",
+        "title": "SeBackupPrivilege accordé au-delà des Admins/Backup Operators",
+        "severity": "warning",
+        "ref": "CIS 2.2.10 · ANSSI R-38",
+        "category": "Droits & Privilèges",
+        "right_key": "sebackupprivilege",
+        "allowed_groups": {"*s-1-5-32-544", "*s-1-5-32-551"},
+        "remediation": "SeBackupPrivilege = Administrators + Backup Operators. Permet de lire tout fichier indépendamment des ACL.",
+    },
+    {
+        "id": "PRIV-R005",
+        "title": "SeLoadDriverPrivilege accordé au-delà des Admins",
+        "severity": "critical",
+        "ref": "CIS 2.2.30 · ANSSI R-38",
+        "category": "Droits & Privilèges",
+        "right_key": "seloaddriverprivilege",
+        "allowed_groups": {"*s-1-5-32-544"},
+        "remediation": "SeLoadDriverPrivilege = Administrators seulement. Charger un driver malveillant = contrôle total du noyau, contournement de tout EDR.",
+    },
+]
+
+
+def evaluate_privright_rules(privright_settings: dict) -> list:
+    """Évalue les règles Privilege Rights depuis [Privilege Rights] de GptTmpl.inf."""
+    findings = []
+    if not privright_settings:
+        return findings
+    for rule in AUDIT_RULES_PRIVRIGHTS:
+        key = rule["right_key"].lower()
+        raw = privright_settings.get(key)
+        if raw is None:
+            continue
+        assigned = {v.strip().lower() for v in raw.split(',') if v.strip()}
+        violated = False
+        detail = f"Droit accordé à : {raw}"
+        if rule.get("empty_only"):
+            if assigned:
+                violated = True
+                detail = f"Droit non vide — accordé à : {raw}"
+        elif "allowed_groups" in rule:
+            allowed = {g.lower() for g in rule["allowed_groups"]}
+            extra = assigned - allowed
+            if extra:
+                violated = True
+                detail = f"Groupes non autorisés : {', '.join(sorted(extra))}"
+        if violated:
+            findings.append({
+                "rule_id":     rule["id"],
+                "title":       rule["title"],
+                "severity":    rule["severity"],
+                "ref":         rule["ref"],
+                "category":    rule["category"],
+                "remediation": rule["remediation"],
+                "detail":      detail,
+                "not_configured": False,
+            })
+    return findings
 
 
 def evaluate_registry_xml_rules(rsop_registry_xml: dict) -> list:
@@ -1354,50 +1316,36 @@ def parse_psscripts_ini(content: str) -> dict:
 
 
 def parse_gpttmpl(content: str) -> dict:
-    """Parse GptTmpl.inf → dict {section: {clé_lowercase: valeur}}
-    Robuste aux encodages mixtes, espaces parasites et sections inconnues.
-    """
+    """Parse GptTmpl.inf → dict {section: {clé_lowercase: valeur}}"""
     result = {}
     content = content.replace('\r\n', '\n').replace('\r', '\n')
     if content.startswith('\ufeff'):
         content = content[1:]
 
     section_map = {
-        "system access":           "system_access",
-        "password policy":         "password_policy",
-        "event audit":             "event_audit",
-        "registry values":         "registry_values",
-        "kerberos policy":         "kerberos_policy",
-        "privilege rights":        "privilege_rights",
-        "group membership":        "group_membership",
-        "file security":           "file_security",
-        "service general setting": "service_general",
-        "registry keys":           "registry_keys",
-        "application log":         "application_log",
-        "system log":              "system_log",
-        "security log":            "security_log",
-        "unicode":                 "unicode",
-        "version":                 "version",
+        "system access":    "system_access",
+        "password policy":  "password_policy",
+        "event audit":      "event_audit",
+        "registry values":  "registry_values",
+        "kerberos policy":  "kerberos_policy",
+        "privilege rights": "privilege_rights",
     }
     current = None
 
     for line in content.splitlines():
         line = line.strip()
-        if not line or line.startswith(';') or line.startswith('#'):
+        if not line or line.startswith(';'):
             continue
         if line.startswith('[') and line.endswith(']'):
-            sec = line[1:-1].strip().lower()
-            current = section_map.get(sec, sec.replace(' ', '_'))
+            sec = line[1:-1].lower()
+            current = section_map.get(sec, sec)
             if current not in result:
                 result[current] = {}
             continue
         if '=' in line and current is not None:
             key, _, val = line.partition('=')
-            k = key.strip().lower()
-            v = val.strip().strip('"')
-            if current == 'registry_values':
-                v = re.sub(r'\s*,\s*', ',', v)
-            result[current][k] = v
+            # Clé en minuscule, sans espaces
+            result[current][key.strip().lower()] = val.strip().strip('"')
 
     return result
 
@@ -1641,8 +1589,9 @@ def detect_gpo_conflicts(gpos: list) -> list:
     return conflicts[:100]   # cap à 100 pour ne pas exploser le JSON
 
 
+
 def _enrich_gpos_for_search(gpos: list, gpo_reports: list) -> list:
-    """Injecte findings et wmi_filter dans chaque GPO pour l'index de recherche."""
+    """Injecte les findings calculés dans chaque GPO pour les indexer dans la recherche."""
     report_by_guid = {r['guid']: r for r in gpo_reports}
     for gpo in gpos:
         report = report_by_guid.get(gpo['guid'], {})
@@ -1884,7 +1833,7 @@ def build_search_index(gpos: list) -> list:
                  f"{'ENFORCED' if link.get('enforced') else 'Normal'}"
                  f"{' | Lien désactivé' if link.get('disabled') else ''}")
 
-        # ── Findings de sécurité ─────────────────────────────────────────────
+        # ── Findings de sécurité (indexés pour la recherche) ─────────────────
         for f in gpo.get('_findings_preview', []):
             _add(gpo, 'Constatation sécurité', '🔒',
                  f.get('title', ''), f.get('severity', ''), f.get('category', ''))
@@ -1892,9 +1841,13 @@ def build_search_index(gpos: list) -> list:
     return index
 
 
+
 def _gpo_flags(gpo: dict) -> int:
-    try: return int(gpo.get('flags', 0))
-    except: return 0
+    """Retourne les flags d'une GPO comme entier (0=actif, 1=PC off, 2=user off, 3=tout off)."""
+    try:
+        return int(gpo.get('flags', 0))
+    except (ValueError, TypeError):
+        return 0
 
 def is_gpo_fully_disabled(gpo: dict) -> bool:
     return _gpo_flags(gpo) == 3
@@ -1906,31 +1859,35 @@ def is_gpo_user_disabled(gpo: dict) -> bool:
     return _gpo_flags(gpo) in (2, 3)
 
 def _ou_depth(ou_dn: str) -> int:
+    """Profondeur d'un DN dans l'arbre AD (nombre de composants OU=)."""
     return len([p for p in ou_dn.split(',') if p.strip().upper().startswith('OU=')])
 
 def _gpo_max_depth(gpo: dict) -> int:
     links = gpo.get('links', [])
-    if not links: return 0
+    if not links:
+        return 0
     return max((_ou_depth(l.get('ou', '')) for l in links), default=0)
 
 def build_rsop(gpos: list) -> tuple[dict, list]:
-    """RSOP avec tri par profondeur OU (GPO domaine < OU parente < OU enfant < Enforced)."""
     """
     Construit le RSOP (Resultant Set of Policy) en agrégeant toutes les GPO.
     GPO priorité = ordre dans la liste (dernier = priorité la plus haute).
     Retourne (rsop_settings dict, rsop_registry list).
     """
     rsop_settings = {}
-    rsop_registry = {}
-    rsop_registry_xml = {}
+    rsop_registry = {}       # Registry.pol : (key_lower, vname_lower) -> int/str
+    rsop_registry_xml = {}   # Registry.xml : (hive\key_lower, name_lower) -> int/str
 
+    # Trier par priorité Windows réelle :
+    # GPO domaine (profondeur 0) → OU parente → OU enfant → Enforced (priorité max)
     enforced_gpos = [g for g in gpos if any(l.get('enforced') for l in g.get('links', []))]
     normal_gpos   = [g for g in gpos if not any(l.get('enforced') for l in g.get('links', []))]
     normal_gpos.sort(key=_gpo_max_depth)
     enforced_gpos.sort(key=_gpo_max_depth)
-    ordered_gpos = normal_gpos + enforced_gpos
+    ordered_gpos = normal_gpos + enforced_gpos  # dernier = priorité la plus haute
 
     for gpo in ordered_gpos:
+        # Ignorer les GPO entièrement désactivées
         if is_gpo_fully_disabled(gpo):
             continue
 
@@ -2179,8 +2136,8 @@ class GPOCollector:
         wmi_filters = self._get_wmi_filters()
         gpos = []
         for entry in self.conn.entries:
-            # Utiliser entry_attributes_as_dict pour éviter LDAPCursorAttributeError
-            # sur les attributs absents (comportement de ldap3 selon la version)
+            # entry_attributes_as_dict évite LDAPCursorAttributeError
+            # quand un attribut est absent (comportement selon la version de ldap3)
             attrs = entry.entry_attributes_as_dict
 
             def _get(name, default=''):
@@ -2195,15 +2152,15 @@ class GPOCollector:
             if not guid:
                 continue
 
-            wql_filter_dn = _get('gPCWQLFilter')
+            # Filtre WMI éventuel
+            wql_dn = _get('gPCWQLFilter')
             wmi_info = None
-            if wql_filter_dn and wql_filter_dn not in ('', 'None', '[]'):
-                wmi_guid_m = re.search(r'\{([0-9A-Fa-f-]{36})\}', wql_filter_dn)
-                if wmi_guid_m:
-                    wmi_guid = '{' + wmi_guid_m.group(1).upper() + '}'
-                    wmi_info = wmi_filters.get(wmi_guid, {
-                        'guid': wmi_guid, 'name': wmi_guid,
-                        'query': wql_filter_dn, 'description': '',
+            if wql_dn and wql_dn not in ('', 'None', '[]'):
+                m = re.search(r'\{([0-9A-Fa-f-]{36})\}', wql_dn)
+                if m:
+                    wk = '{' + m.group(1).upper() + '}'
+                    wmi_info = wmi_filters.get(wk, {
+                        'guid': wk, 'name': wk, 'query': wql_dn, 'description': '',
                     })
 
             gpos.append({
@@ -2223,12 +2180,16 @@ class GPOCollector:
         return gpos
 
     def _get_wmi_filters(self) -> dict:
-        """Récupère les filtres WMI depuis l'AD."""
+        """Récupère les filtres WMI (msWMI-Som) depuis l'AD."""
         filters = {}
         try:
             wmi_dn = f"CN=SOM,CN=WMIPolicy,CN=System,{self.base_dn}"
-            self.conn.search(search_base=wmi_dn, search_filter='(objectClass=msWMI-Som)',
-                             search_scope=SUBTREE, attributes=['cn','msWMI-Name','msWMI-Parm1','msWMI-Parm2'])
+            self.conn.search(
+                search_base=wmi_dn,
+                search_filter='(objectClass=msWMI-Som)',
+                search_scope=SUBTREE,
+                attributes=['cn', 'msWMI-Name', 'msWMI-Parm1', 'msWMI-Parm2'],
+            )
             for entry in self.conn.entries:
                 attrs = entry.entry_attributes_as_dict
                 def _g(k, d=''):
@@ -2237,18 +2198,18 @@ class GPOCollector:
                     x = v[0] if isinstance(v, list) else v
                     return str(x) if x else d
                 guid = _g('cn')
-                if not guid: continue
-                name  = _g('msWMI-Name')
-                desc  = _g('msWMI-Parm1')
+                if not guid:
+                    continue
                 query = _g('msWMI-Parm2')
                 wql_m = re.search(r'SELECT\s+.+', query, re.IGNORECASE | re.DOTALL)
-                clean = wql_m.group(0).strip() if wql_m else query[:200]
                 filters['{' + guid.strip('{}').upper() + '}'] = {
-                    'guid': guid, 'name': name or guid,
-                    'query': clean, 'description': desc,
+                    'guid': guid,
+                    'name': _g('msWMI-Name') or guid,
+                    'query': wql_m.group(0).strip() if wql_m else query[:200],
+                    'description': _g('msWMI-Parm1'),
                 }
         except Exception:
-            pass
+            pass  # CN=SOM absent si aucun filtre WMI configuré
         return filters
 
     def get_gpo_links(self):
@@ -2563,7 +2524,11 @@ class GPOCollector:
             return []
         try:
             files = self._smb.listPath(self._sysvol_share, rel_path + '\\*')
-            return [f for f in files if f.get_longname() not in ('..', '.', '')]
+            return [
+                f for f in files
+                if f.get_longname() not in ('..', '.', '')
+                and not f.is_directory()
+            ]
         except Exception:
             return []
 
@@ -2608,7 +2573,6 @@ def generate_demo_data() -> list:
                     'passwordhistorysize': '5',
                     'passwordcomplexity': '0',
                     'maximumpasswordage': '42',
-            'wmi_filter': None,
                 },
                 'system_access': {
                     'lockoutbadcount': '0',
@@ -2617,15 +2581,12 @@ def generate_demo_data() -> list:
                     'lmcompatibilitylevel': '1',
                     'restrictanonymous': '0',
                     'enableguestaccount': '0',
-            'wmi_filter': None,
                 },
                 'event_audit': {
                     'auditlogonevents': '0',
                     'auditaccountmanage': '0',
                     'auditpolicychange': '0',
-            'wmi_filter': None,
                 },
-            'wmi_filter': None,
             },
             'registry_entries': [
                 (r'hklm\system\currentcontrolset\control\securityproviders\wdigest',
@@ -2633,7 +2594,6 @@ def generate_demo_data() -> list:
                 (r'hklm\system\currentcontrolset\services\lanmanserver\parameters',
                  'smb1', 4, 1),
             ],
-            'wmi_filter': None,
         },
         {
             'name': 'GPO_Sécurité_Postes_WS2022',
@@ -2650,7 +2610,6 @@ def generate_demo_data() -> list:
                     'passwordhistorysize': '24',
                     'passwordcomplexity': '1',
                     'maximumpasswordage': '90',
-            'wmi_filter': None,
                 },
                 'system_access': {
                     'nolmhash': '1',
@@ -2659,15 +2618,12 @@ def generate_demo_data() -> list:
                     'lockoutbadcount': '5',
                     'lockoutduration': '30',
                     'restrictanonymous': '1',
-            'wmi_filter': None,
                 },
                 'event_audit': {
                     'auditlogonevents': '3',
                     'auditaccountmanage': '3',
                     'auditpolicychange': '3',
-            'wmi_filter': None,
                 },
-            'wmi_filter': None,
             },
             'registry_entries': [
                 (r'hklm\software\policies\microsoft\windowsfirewall\domainprofile',
@@ -2695,13 +2651,11 @@ def generate_demo_data() -> list:
             'scripts': {
                 'startup': [{'cmd': r'\\file01\scripts\map_drives.ps1', 'params': ''}],
                 'shutdown': [], 'logon': [], 'logoff': [],
-            'wmi_filter': None,
             },
             'scheduled_tasks': [
                 {'name': 'Sauvegarde profil', 'cmd': 'robocopy.exe',
                  'args': r'%USERPROFILE% \\backup01\profiles', 'user': 'SYSTEM', 'action': 'C'},
             ],
-            'wmi_filter': None,
         },
         {
             'name': 'GPO_Désactivations_Legacy',
@@ -2714,7 +2668,6 @@ def generate_demo_data() -> list:
                 (r'hklm\software\policies\microsoft\windowsfirewall\domainprofile',
                  'enablefirewall', 4, 0),  # Pare-feu OFF — mauvaise pratique
             ],
-            'wmi_filter': None,
         },
         {
             'name': 'GPO_Chiffrement_BitLocker',
@@ -2724,7 +2677,6 @@ def generate_demo_data() -> list:
             'links': [{'ou': 'OU=Computers,DC=corp,DC=local', 'flags': 2, 'enforced': True, 'disabled': False}],
             'settings': {'password_policy': {}, 'system_access': {}, 'event_audit': {}},
             'registry_entries': [],
-            'wmi_filter': None,
         },
         {
             'name': 'GPO_Legacy_XP_Obsolete',
@@ -2734,7 +2686,6 @@ def generate_demo_data() -> list:
             'links': [],  # Orpheline
             'settings': {'password_policy': {}, 'system_access': {}, 'event_audit': {}},
             'registry_entries': [],
-            'wmi_filter': None,
         },
         # ── GPO générant des conflits démontrables ──
         {
@@ -2748,27 +2699,22 @@ def generate_demo_data() -> list:
                     # Conflit sécurité : longueur différente de Default Domain Policy (8) et GPO_Sécurité (16)
                     'minimumpasswordlength': '12',
                     'maximumpasswordage': '180',   # Conflit avec Default (42) et Sécurité (90)
-            'wmi_filter': None,
                 },
                 'event_audit': {
                     # Conflit audit : valeur différente de GPO_Sécurité_Postes (3)
                     'auditlogonevents':   '1',    # Succès seulement vs Succès+Échec
                     'auditaccountmanage': '2',    # Échec seulement
-            'wmi_filter': None,
                 },
                 'system_access': {
                     'lmcompatibilitylevel': '3',   # Conflit : Default=1, Sécurité=5, ici=3
                     'lockoutbadcount': '15',        # Conflit : Default=0, Sécurité=5, ici=15
-            'wmi_filter': None,
                 },
-            'wmi_filter': None,
             },
             'registry_entries': [
                 # Conflit registre : pare-feu OFF ici vs ON dans GPO_Sécurité
                 (r'hklm\software\policies\microsoft\windowsfirewall\domainprofile',
                  'enablefirewall', 4, 0),
             ],
-            'wmi_filter': None,
         },
         {
             'name': 'GPO_Conformité_RGPD',
@@ -2781,17 +2727,13 @@ def generate_demo_data() -> list:
                     # Conflit : encore une valeur différente pour minimumpasswordlength
                     'minimumpasswordlength': '10',
                     'passwordhistorysize': '12',    # Conflit avec Default (5) et Sécurité (24)
-            'wmi_filter': None,
                 },
                 'system_access': {
                     'lockoutduration': '5',         # Conflit : Sécurité=30, ici=5
                     'nolmhash': '1',                # Pas de conflit (même valeur que Sécurité)
-            'wmi_filter': None,
                 },
-            'wmi_filter': None,
             },
             'registry_entries': [],
-            'wmi_filter': None,
         },
     ]
 
@@ -3118,7 +3060,7 @@ def analyze_gpos(gpos: list) -> dict:
     # Évaluer les règles sur les Registry.xml (préférences registre)
     global_findings += evaluate_registry_xml_rules(rsop_registry_xml)
 
-    # Évaluer les droits utilisateurs (Privilege Rights)
+    # Évaluer les droits utilisateurs (Privilege Rights — [Privilege Rights] de GptTmpl.inf)
     rsop_privrights = rsop_settings.get('privilege_rights', {})
     global_findings += evaluate_privright_rules(rsop_privrights)
 
@@ -3206,7 +3148,7 @@ def analyze_gpos(gpos: list) -> dict:
             'score':       score,
             'is_orphan':   not gpo['links'],
             'has_content': has_content,
-            'wmi_filter':  gpo.get('wmi_filter'),
+            'wmi_filter':  gpo.get('wmi_filter'),  # filtre WMI éventuel
         })
         # Index de contenu séparé — chargé uniquement quand on ouvre une GPO
         gpo_content_index[gpo['guid']] = content_sections
@@ -3307,8 +3249,9 @@ def analyze_gpos(gpos: list) -> dict:
     criticals = sum(1 for f in global_findings if f['severity'] == 'critical')
     warnings  = sum(1 for f in global_findings if f['severity'] == 'warning')
     infos     = sum(1 for f in global_findings if f['severity'] == 'info')
-    orphan_penalty   = min(len(orphan_gpos) * 1, 10)
-    conflict_penalty = min(conflicts_high * 3 + conflicts_low, 15)
+    # Pénalités supplémentaires : orphelines et conflits dégradent le score
+    orphan_penalty   = min(len(orphan_gpos) * 1, 10)       # max -10 pts
+    conflict_penalty = min(conflicts_high * 3 + conflicts_low, 15)  # max -15 pts
     global_score = max(0, min(100,
         100 - criticals * 15 - warnings * 5 - infos * 2
         - orphan_penalty - conflict_penalty
@@ -5037,7 +4980,6 @@ function searchOU(q){ _ouFilter=q.toLowerCase(); renderByOU(_ouFilter); }
 function _ouDepth(dn){ return(dn.match(/\bOU=/gi)||[]).length; }
 
 function renderByOU(filter){
-  // ── Collecter les OU avec leurs GPO ──────────────────────────────────
   const ouMap={};
   _gpos.forEach((g,gi)=>(g.links||[]).forEach(l=>{
     const dn=l.ou||'(racine)';
@@ -5050,86 +4992,76 @@ function renderByOU(filter){
       changed:(g.changed||'').slice(0,10),gpoIdx:gi,
     });
   }));
-
   if(!Object.keys(ouMap).length){
     document.getElementById('byou-content').innerHTML=
       '<div class="empty-state"><div class="es-icon">⊢</div><div class="es-title">Aucune OU trouvée</div></div>';
     return;
   }
-
-  // ── Extraire les segments OU d'un DN (ancêtre → feuille) ─────────────
-  // "OU=Laptops,OU=Computers,OU=Corp,DC=corp,DC=local" → ['Corp','Computers','Laptops']
+  // Extraire les segments OU d'un DN : ancêtre → feuille
+  // "OU=Laptops,OU=Computers,DC=corp,DC=local" → ['Computers','Laptops']
   function ouSegs(dn){
     return dn.split(',')
       .filter(p=>p.trim().toUpperCase().startsWith('OU='))
       .map(p=>p.trim().slice(3))
       .reverse();
   }
-
-  // ── Construire l'arbre ───────────────────────────────────────────────
+  // Construire l'arbre
   const tree={label:'',fullDn:'',children:{},gpos:[]};
-
   Object.values(ouMap).forEach(({dn,gpos})=>{
     const segs=ouSegs(dn);
-    if(!segs.length){ tree.gpos.push(...gpos.map(g=>({...g,ouDn:dn}))); return; }
+    if(!segs.length){ tree.gpos.push(...gpos); return; }
     let node=tree;
     segs.forEach((seg,i)=>{
       const k=seg.toLowerCase();
       if(!node.children[k]){
-        const dcPart=dn.split(',').filter(p=>p.trim().toUpperCase().startsWith('DC=')).join(',');
-        const ouPart=segs.slice(0,i+1).reverse().map(s=>`OU=${s}`).join(',');
-        node.children[k]={label:seg,fullDn:ouPart+(dcPart?','+dcPart:''),children:{},gpos:[]};
+        const dcP=dn.split(',').filter(p=>p.trim().toUpperCase().startsWith('DC=')).join(',');
+        const ouP=segs.slice(0,i+1).reverse().map(s=>`OU=${s}`).join(',');
+        node.children[k]={label:seg,fullDn:ouP+(dcP?','+dcP:''),children:{},gpos:[]};
       }
       node=node.children[k];
-      if(i===segs.length-1) node.gpos.push(...gpos.map(g=>({...g,ouDn:dn})));
+      if(i===segs.length-1) node.gpos.push(...gpos);
     });
   });
-
-  // ── Trier les GPO par priorité dans chaque nœud ──────────────────────
-  function sortGpos(gpos){
-    const enf=gpos.filter(g=>g.enforced).sort((a,b)=>b.gpoIdx-a.gpoIdx);
-    const norm=gpos.filter(g=>!g.enforced).sort((a,b)=>b.gpoIdx-a.gpoIdx);
-    return[...norm,...enf]; // enforced en dernier = priorité la plus haute
+  // Trier les GPO : normales par priorité croissante, enforced en dernier
+  function sortG(gpos){
+    const e=gpos.filter(g=>g.enforced).sort((a,b)=>b.gpoIdx-a.gpoIdx);
+    const n=gpos.filter(g=>!g.enforced).sort((a,b)=>b.gpoIdx-a.gpoIdx);
+    return[...n,...e];
   }
-
   const _sc=s=>s==null?'var(--txt3)':s>=70?'var(--green)':s>=40?'var(--amber)':'var(--red)';
-  const LC='var(--border2)'; // couleur des lignes de connexion
-
-  // ── Rendu récursif d'un nœud ─────────────────────────────────────────
+  const LC='var(--border2)';
+  // Rendu récursif d'un nœud
   function renderNode(node,depth){
-    const children=Object.values(node.children).sort((a,b)=>a.label.localeCompare(b.label));
-    const gpos=sortGpos(node.gpos);
-    if(!gpos.length&&!children.length) return'';
-
-    const indent=depth*22;
+    const kids=Object.values(node.children).sort((a,b)=>a.label.localeCompare(b.label));
+    const gpos=sortG(node.gpos);
+    if(!gpos.length&&!kids.length)return'';
+    const ind=depth*22;
     const enf=gpos.filter(g=>g.enforced).length;
     const uid='ou-'+Math.random().toString(36).slice(2,8);
-    let html='';
-
+    let h='';
     if(node.label){
-      html+=`<div style="margin-left:${indent}px;margin-bottom:5px;position:relative">
+      h+=`<div style="margin-left:${ind}px;margin-bottom:5px;position:relative">
         ${depth>0?`<div style="position:absolute;left:-11px;top:0;bottom:50%;width:11px;border-left:1px solid ${LC};border-bottom:1px solid ${LC};border-bottom-left-radius:3px;pointer-events:none"></div>`:''}
         <div class="ou-card" style="margin-bottom:0">
-          <div class="ou-card-head" id="${uid}-h" onclick="document.getElementById('${uid}-b').classList.toggle('open')">
-            <span style="color:var(--teal);font-size:12px">${children.length?'▶':'⊢'}</span>
+          <div class="ou-card-head" onclick="document.getElementById('${uid}').classList.toggle('open')">
+            <span style="color:var(--teal);font-size:12px">${kids.length?'▶':'⊢'}</span>
             <div style="flex:1;min-width:0">
-              <span style="font-size:13px;font-weight:600;color:var(--txt)">${_escHtml(node.label)}</span>
+              <span style="font-size:13px;font-weight:600">${_escHtml(node.label)}</span>
               <span style="font-size:10px;color:var(--txt3);margin-left:8px;font-family:'JetBrains Mono',monospace">${_escHtml(node.fullDn)}</span>
             </div>
-            <span style="font-size:11px;color:var(--txt3);flex-shrink:0;display:flex;gap:8px;align-items:center">
+            <span style="font-size:11px;color:var(--txt3);flex-shrink:0;display:flex;gap:6px">
               ${gpos.length?`<span style="color:var(--blue)">${gpos.length} GPO</span>`:''}
-              ${children.length?`<span>${children.length} sous-OU</span>`:''}
+              ${kids.length?`<span>${kids.length} sous-OU</span>`:''}
               ${enf?`<span style="color:var(--red)">${enf} ENFORCED</span>`:''}
             </span>
           </div>
-          <div class="ou-card-body" id="${uid}-b">`;
-
+          <div class="ou-card-body" id="${uid}">`;
       if(gpos.length){
-        html+=`<div style="font-size:10px;color:var(--txt3);padding:5px 14px 6px;background:var(--surface2);border-bottom:1px solid var(--border)">
-          Priorité d'application : <strong>P1 = basse</strong> → <strong>P${gpos.length} = haute (gagne les conflits)</strong>
+        h+=`<div style="font-size:10px;color:var(--txt3);padding:5px 14px;background:var(--surface2);border-bottom:1px solid var(--border)">
+          Priorité : <strong>P1 = basse</strong> → <strong>P${gpos.length} = haute (gagne les conflits)</strong>
         </div>`;
         gpos.forEach((g,i)=>{
-          html+=`<div class="ou-gpo-row" style="cursor:pointer" onclick="openGPODetail('${g.guid}')">
+          h+=`<div class="ou-gpo-row" style="cursor:pointer" onclick="openGPODetail('${g.guid}')">
             <span class="ou-priority">P${i+1}${g.enforced?' ⬆':''}</span>
             <span class="ou-gpo-name">${_escHtml(g.name)}</span>
             ${g.score!=null?`<span class="ou-score" style="color:${_sc(g.score)}">${g.score}/100</span>`:''}
@@ -5141,40 +5073,31 @@ function renderByOU(filter){
           </div>`;
         });
       }
-      html+=`</div></div></div>`;
+      h+=`</div></div></div>`;
     }
-
-    // Sous-OUs avec ligne verticale de connexion parent→enfants
-    if(children.length){
-      html+=`<div style="margin-left:${node.label?indent+22:indent}px;position:relative">`;
-      if(node.label){
-        html+=`<div style="position:absolute;left:0;top:0;bottom:10px;border-left:1px dashed ${LC};pointer-events:none"></div>`;
-      }
-      children.forEach(child=>{ html+=renderNode(child,0); });
-      html+=`</div>`;
+    // Sous-OUs avec ligne verticale de connexion
+    if(kids.length){
+      h+=`<div style="margin-left:${node.label?ind+22:ind}px;position:relative">`;
+      if(node.label)h+=`<div style="position:absolute;left:0;top:0;bottom:10px;border-left:1px dashed ${LC};pointer-events:none"></div>`;
+      kids.forEach(c=>{h+=renderNode(c,0);});
+      h+=`</div>`;
     }
-    return html;
+    return h;
   }
-
-  // ── Rendu final ───────────────────────────────────────────────────────
   let html='';
-
   // GPO liées directement au domaine (pas dans une OU)
   if(tree.gpos.length){
-    const gpos=sortGpos(tree.gpos);
+    const gpos=sortG(tree.gpos);
     html+=`<div class="ou-card" style="margin-bottom:10px;border-left:2px solid var(--blue)">
       <div class="ou-card-head" onclick="this.nextElementSibling.classList.toggle('open')">
-        <span style="font-size:14px">🌐</span>
+        <span>🌐</span>
         <div style="flex:1"><span style="font-size:13px;font-weight:600">Domaine (racine)</span>
-          <span style="font-size:11px;color:var(--txt3);margin-left:8px">Ces GPO s'appliquent sur tout le domaine — priorité la plus basse</span></div>
+          <span style="font-size:11px;color:var(--txt3);margin-left:8px">GPO applicables sur tout le domaine — priorité la plus basse</span></div>
         <span style="font-size:11px;color:var(--txt3)">${gpos.length} GPO ▶</span>
       </div>
       <div class="ou-card-body">
-        <div style="font-size:10px;color:var(--txt3);padding:5px 14px 6px;background:var(--surface2);border-bottom:1px solid var(--border)">
-          Priorité P1 (basse) → P${gpos.length} (haute)
-        </div>
-        ${gpos.map((g,i)=>`
-        <div class="ou-gpo-row" style="cursor:pointer" onclick="openGPODetail('${g.guid}')">
+        <div style="font-size:10px;color:var(--txt3);padding:5px 14px;background:var(--surface2);border-bottom:1px solid var(--border)">P1 (basse) → P${gpos.length} (haute)</div>
+        ${gpos.map((g,i)=>`<div class="ou-gpo-row" style="cursor:pointer" onclick="openGPODetail('${g.guid}')">
           <span class="ou-priority">P${i+1}</span>
           <span class="ou-gpo-name">${_escHtml(g.name)}</span>
           ${g.score!=null?`<span class="ou-score" style="color:${_sc(g.score)}">${g.score}/100</span>`:''}
@@ -5184,11 +5107,7 @@ function renderByOU(filter){
       </div>
     </div>`;
   }
-
-  // Nœuds racine de l'arbre (triés alphabétiquement)
-  Object.values(tree.children).sort((a,b)=>a.label.localeCompare(b.label))
-    .forEach(child=>{ html+=renderNode(child,0); });
-
+  Object.values(tree.children).sort((a,b)=>a.label.localeCompare(b.label)).forEach(c=>{html+=renderNode(c,0);});
   document.getElementById('byou-content').innerHTML=
     html||'<div class="empty-state"><div class="es-icon">⊢</div><div class="es-title">Aucune OU trouvée</div></div>';
 }
@@ -5967,11 +5886,6 @@ def _explain_script_error(error_str):
         info("  Relancez — cela arrive parfois sur les gros domaines.")
     else:
         info("→ Copiez l'erreur ci-dessus et collez-la dans le chat pour de l'aide.")
-
-# ─── Entry point ─────────────────────────────────────────────────────────────
-
-# ─── Entry point ──────────────────────────────────────────────────────────────
-
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
