@@ -1315,6 +1315,505 @@ def parse_psscripts_ini(content: str) -> dict:
     return parse_scripts(content, '', '', '')
 
 
+def parse_software_xml(content: str) -> list:
+    """Parse Machine/Preferences/Applications/Applications.xml — installation logiciels."""
+    if not ET or not content:
+        return []
+    items = []
+    try:
+        root = ET.fromstring(content)
+        for app in root.iter():
+            tag = app.tag.split('}')[-1] if '}' in app.tag else app.tag
+            if tag not in ('Application', 'Package'):
+                continue
+            props = next((c for c in app if (c.tag.split('}')[-1] if '}' in c.tag else c.tag).lower() == 'properties'), None)
+            if props is None:
+                props = app
+            name      = _xml_attr(props, 'name', 'productName', 'Name')
+            path      = _xml_attr(props, 'path', 'msiPath', 'packagePath')
+            action    = _xml_attr(props, 'action', 'Action')
+            version   = _xml_attr(props, 'version', 'productVersion')
+            publisher = _xml_attr(props, 'publisher', 'manufacturer')
+            action_map = {'I': 'Installer', 'U': 'Mettre à jour', 'R': 'Réparer', 'D': 'Désinstaller',
+                          '0': 'Installer', '1': 'Mettre à jour', '2': 'Réparer', '3': 'Désinstaller'}
+            items.append({
+                'name':      name or path or '(sans nom)',
+                'path':      path,
+                'action':    action_map.get(action, action or 'Installer'),
+                'version':   version,
+                'publisher': publisher,
+            })
+    except Exception:
+        pass
+    return items
+
+
+def parse_ini_files_xml(content: str) -> list:
+    """Parse Machine/Preferences/IniFiles/IniFiles.xml — modification fichiers .ini."""
+    if not ET or not content:
+        return []
+    items = []
+    try:
+        root = ET.fromstring(content)
+        for f in root.iter():
+            tag = f.tag.split('}')[-1] if '}' in f.tag else f.tag
+            if tag != 'Ini':
+                continue
+            props = next((c for c in f if (c.tag.split('}')[-1] if '}' in c.tag else c.tag).lower() == 'properties'), None)
+            if props is None:
+                props = f
+            items.append({
+                'path':    _xml_attr(props, 'path', 'filePath'),
+                'section': _xml_attr(props, 'section', 'sectionName'),
+                'property':_xml_attr(props, 'property', 'propertyName'),
+                'value':   _xml_attr(props, 'value', 'propertyValue'),
+                'action':  _xml_attr(props, 'action', 'Action'),
+            })
+    except Exception:
+        pass
+    return items
+
+
+def parse_datasources_xml(content: str) -> list:
+    """Parse Machine/Preferences/DataSources/DataSources.xml — sources ODBC."""
+    if not ET or not content:
+        return []
+    items = []
+    try:
+        root = ET.fromstring(content)
+        for ds in root.iter():
+            tag = ds.tag.split('}')[-1] if '}' in ds.tag else ds.tag
+            if tag != 'DataSource':
+                continue
+            props = next((c for c in ds if (c.tag.split('}')[-1] if '}' in c.tag else c.tag).lower() == 'properties'), None)
+            if props is None:
+                props = ds
+            items.append({
+                'name':   _xml_attr(props, 'dsn', 'name', 'dsnName'),
+                'driver': _xml_attr(props, 'driver', 'driverName'),
+                'server': _xml_attr(props, 'server', 'serverName'),
+                'db':     _xml_attr(props, 'database', 'databaseName'),
+                'action': _xml_attr(props, 'action', 'Action'),
+                'scope':  _xml_attr(props, 'userDSN', 'type') or 'Système',
+            })
+    except Exception:
+        pass
+    return items
+
+
+def parse_internet_settings_xml(content: str) -> list:
+    """Parse User/Preferences/InternetSettings/InternetSettings.xml — proxy IE."""
+    if not ET or not content:
+        return []
+    items = []
+    try:
+        root = ET.fromstring(content)
+        for s in root.iter():
+            tag = s.tag.split('}')[-1] if '}' in s.tag else s.tag
+            if tag not in ('InternetSettings', 'Internet'):
+                continue
+            props = next((c for c in s if (c.tag.split('}')[-1] if '}' in c.tag else c.tag).lower() == 'properties'), None)
+            if props is None:
+                props = s
+            proxy  = _xml_attr(props, 'proxyServer', 'proxy')
+            bypass = _xml_attr(props, 'proxyOverride', 'bypass')
+            enable = _xml_attr(props, 'enableProxy', 'proxyEnable')
+            home   = _xml_attr(props, 'startPage', 'homePage')
+            if proxy or home:
+                items.append({
+                    'proxy':   proxy,
+                    'bypass':  bypass,
+                    'enabled': enable in ('1', 'true', 'True'),
+                    'home':    home,
+                })
+    except Exception:
+        pass
+    return items
+
+
+def parse_network_shares_xml(content: str) -> list:
+    """Parse Machine/Preferences/NetworkShares/NetworkShares.xml."""
+    if not ET or not content:
+        return []
+    items = []
+    try:
+        root = ET.fromstring(content)
+        for ns in root.iter():
+            tag = ns.tag.split('}')[-1] if '}' in ns.tag else ns.tag
+            if tag != 'NetShare':
+                continue
+            props = next((c for c in ns if (c.tag.split('}')[-1] if '}' in c.tag else c.tag).lower() == 'properties'), None)
+            if props is None:
+                props = ns
+            action_map = {'C': 'Créer', 'R': 'Remplacer', 'U': 'Mettre à jour', 'D': 'Supprimer'}
+            action = _xml_attr(props, 'action', 'Action')
+            items.append({
+                'name':    _xml_attr(props, 'name', 'shareName'),
+                'path':    _xml_attr(props, 'path', 'localPath'),
+                'comment': _xml_attr(props, 'comment', 'description'),
+                'limit':   _xml_attr(props, 'userLimit', 'maxUsers'),
+                'action':  action_map.get(action, action or 'Créer'),
+            })
+    except Exception:
+        pass
+    return items
+
+
+def parse_folders_xml(content: str) -> list:
+    """Parse Machine/Preferences/Folders/Folders.xml — création/suppression dossiers."""
+    if not ET or not content:
+        return []
+    items = []
+    try:
+        root = ET.fromstring(content)
+        for f in root.iter():
+            tag = f.tag.split('}')[-1] if '}' in f.tag else f.tag
+            if tag != 'Folder':
+                continue
+            props = next((c for c in f if (c.tag.split('}')[-1] if '}' in c.tag else c.tag).lower() == 'properties'), None)
+            if props is None:
+                props = f
+            action_map = {'C': 'Créer', 'R': 'Remplacer', 'U': 'Mettre à jour', 'D': 'Supprimer'}
+            action = _xml_attr(props, 'action', 'Action')
+            items.append({
+                'path':     _xml_attr(props, 'path', 'targetPath'),
+                'action':   action_map.get(action, action or 'Créer'),
+                'readonly': _xml_attr(props, 'readOnly') in ('1', 'true'),
+                'hidden':   _xml_attr(props, 'hidden') in ('1', 'true'),
+                'archive':  _xml_attr(props, 'archive') in ('1', 'true'),
+            })
+    except Exception:
+        pass
+    return items
+
+
+def parse_regional_xml(content: str) -> list:
+    """Parse User/Preferences/Regional/Regional.xml — paramètres régionaux."""
+    if not ET or not content:
+        return []
+    items = []
+    try:
+        root = ET.fromstring(content)
+        for r in root.iter():
+            tag = r.tag.split('}')[-1] if '}' in r.tag else r.tag
+            if tag not in ('Regional', 'RegionalOptions'):
+                continue
+            props = next((c for c in r if (c.tag.split('}')[-1] if '}' in c.tag else c.tag).lower() == 'properties'), None)
+            if props is None:
+                props = r
+            locale = _xml_attr(props, 'name', 'locale', 'userLocale')
+            tz     = _xml_attr(props, 'timeZone', 'timezone')
+            if locale or tz:
+                items.append({'locale': locale, 'timezone': tz})
+    except Exception:
+        pass
+    return items
+
+
+def parse_network_options_xml(content: str) -> list:
+    """Parse User/Preferences/NetworkOptions/NetworkOptions.xml — VPN/connexions."""
+    if not ET or not content:
+        return []
+    items = []
+    try:
+        root = ET.fromstring(content)
+        for n in root.iter():
+            tag = n.tag.split('}')[-1] if '}' in n.tag else n.tag
+            if tag not in ('Vpn', 'DialUp', 'Connection'):
+                continue
+            props = next((c for c in n if (c.tag.split('}')[-1] if '}' in c.tag else c.tag).lower() == 'properties'), None)
+            if props is None:
+                props = n
+            items.append({
+                'name':   _xml_attr(props, 'name', 'connectionName'),
+                'type':   tag,
+                'server': _xml_attr(props, 'serverAddress', 'phoneNumber'),
+                'action': _xml_attr(props, 'action', 'Action'),
+            })
+    except Exception:
+        pass
+    return items
+
+
+def parse_admx_registry(registry_entries: list) -> list:
+    """
+    Décode les clés de registre brutes (Registry.pol) en paramètres ADMX lisibles.
+    Utilise une table de correspondance des clés ADMX les plus courantes.
+    Retourne une liste de {key, name, value, label, category, alert}
+    """
+    # Table : (clé_registre_lower, nom_valeur_lower) → (label_fr, catégorie, hint_valeur)
+    ADMX_MAP = {
+        # ── Windows Update / WSUS ──
+        ('software\\policies\\microsoft\\windows\\windowsupdate\\au', 'nonautomaticupdates'):
+            ('Windows Update : Mises à jour automatiques désactivées', 'Windows Update', '1=désactivé'),
+        ('software\\policies\\microsoft\\windows\\windowsupdate\\au', 'auoptions'):
+            ('Windows Update : Mode de mise à jour automatique', 'Windows Update', '2=notif,3=auto,4=planifié'),
+        ('software\\policies\\microsoft\\windows\\windowsupdate\\au', 'usewuserver'):
+            ('Windows Update : Utiliser serveur WSUS interne', 'Windows Update', '1=oui'),
+        ('software\\policies\\microsoft\\windows\\windowsupdate', 'wuserver'):
+            ('Windows Update : URL du serveur WSUS', 'Windows Update', 'URL'),
+        ('software\\policies\\microsoft\\windows\\windowsupdate', 'wustatusserver'):
+            ('Windows Update : URL du serveur de stats WSUS', 'Windows Update', 'URL'),
+
+        # ── PowerShell ──
+        ('software\\policies\\microsoft\\windows\\powershell\\scriptblocklogging', 'enablescriptblocklogging'):
+            ('PowerShell : Journalisation ScriptBlock', 'PowerShell', '1=activé'),
+        ('software\\policies\\microsoft\\windows\\powershell\\transcription', 'enabletranscripting'):
+            ('PowerShell : Transcription activée', 'PowerShell', '1=activé'),
+        ('software\\policies\\microsoft\\windows\\powershell\\transcription', 'outputdirectory'):
+            ('PowerShell : Dossier de transcription', 'PowerShell', 'chemin'),
+        ('software\\policies\\microsoft\\windows\\powershell\\modulellogging', 'enablemodulelogging'):
+            ('PowerShell : Journalisation des modules', 'PowerShell', '1=activé'),
+        ('software\\policies\\microsoft\\powershellcore\\scriptblocklogging', 'enablescriptblocklogging'):
+            ('PowerShell Core : Journalisation ScriptBlock', 'PowerShell', '1=activé'),
+
+        # ── Credential Guard / Device Guard ──
+        ('system\\currentcontrolset\\control\\deviceguard', 'enablevirtualizationbasedsecurity'):
+            ('Device Guard : Virtualisation (VBS/Credential Guard)', 'Sécurité avancée', '1=activé'),
+        ('system\\currentcontrolset\\control\\deviceguard', 'requireplatformsecurityfeatures'):
+            ('Device Guard : Niveau de sécurité requis', 'Sécurité avancée', '1=Secure Boot,3=Secure Boot+DMA'),
+        ('system\\currentcontrolset\\control\\lsa', 'lsacfgflags'):
+            ('Credential Guard : Activation', 'Sécurité avancée', '1=activé sans verrou,2=activé avec verrou UEFI'),
+
+        # ── AppLocker ──
+        ('software\\policies\\microsoft\\windows\\srpv2', 'enforcementmode'):
+            ('AppLocker : Mode d\'application', 'AppLocker', '0=audit,1=enforced'),
+
+        # ── BitLocker ──
+        ('software\\policies\\microsoft\\fveroot\\fve', 'osmanageddrive'):
+            ('BitLocker : Lecteur OS géré', 'BitLocker', '1=requis'),
+        ('software\\policies\\microsoft\\fve', 'useadvancedstartup'):
+            ('BitLocker : Démarrage avancé (PIN/clé)', 'BitLocker', '1=activé'),
+        ('software\\policies\\microsoft\\fve', 'recoverykeymessage'):
+            ('BitLocker : Message de récupération', 'BitLocker', 'texte'),
+        ('software\\policies\\microsoft\\fve', 'fdvenableddrive'):
+            ('BitLocker : Lecteurs de données fixes', 'BitLocker', '1=requis'),
+        ('software\\policies\\microsoft\\fve', 'rdvenableddrive'):
+            ('BitLocker : Lecteurs amovibles', 'BitLocker', '1=requis'),
+
+        # ── RDP / Terminal Services ──
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'fdisableauditfail'):
+            ('RDP : Désactiver audit échec connexion', 'RDP / Terminal Services', '1=désactivé'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'userauthenication'):
+            ('RDP : NLA (Network Level Auth) requis', 'RDP / Terminal Services', '1=requis'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'minencryptionlevel'):
+            ('RDP : Niveau de chiffrement minimum', 'RDP / Terminal Services', '1=faible,2=client,3=élevé,4=FIPS'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'fencryptionlevelusedforsessiondata'):
+            ('RDP : Chiffrement des données de session', 'RDP / Terminal Services', ''),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'maxinstances'):
+            ('RDP : Nombre max de sessions', 'RDP / Terminal Services', 'nombre'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'shadow'):
+            ('RDP : Shadowing (contrôle à distance)', 'RDP / Terminal Services', '0=désactivé,1=full,2=view'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'fpromptupdatedsettings'):
+            ('RDP : Redirection imprimantes', 'RDP / Terminal Services', '0=désactivé'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'fdisableclip'):
+            ('RDP : Redirection presse-papiers désactivée', 'RDP / Terminal Services', '1=désactivé'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'fdisabledrives'):
+            ('RDP : Redirection lecteurs désactivée', 'RDP / Terminal Services', '1=désactivé'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'fdisableprnt'):
+            ('RDP : Redirection imprimantes désactivée', 'RDP / Terminal Services', '1=désactivé'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'fdisablelpt'):
+            ('RDP : Redirection ports LPT désactivée', 'RDP / Terminal Services', '1=désactivé'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'fdisablecom'):
+            ('RDP : Redirection ports COM désactivée', 'RDP / Terminal Services', '1=désactivé'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'tsdisconnecttime'):
+            ('RDP : Délai déconnexion session inactive (ms)', 'RDP / Terminal Services', 'millisecondes'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'tsreconnecttime'):
+            ('RDP : Délai reconnexion session déconnectée (ms)', 'RDP / Terminal Services', 'millisecondes'),
+        ('software\\policies\\microsoft\\windows nt\\terminal services', 'maxidletime'):
+            ('RDP : Délai session inactive (ms)', 'RDP / Terminal Services', 'millisecondes'),
+
+        # ── Pare-feu Windows ──
+        ('software\\policies\\microsoft\\windowsfirewall\\domainprofile', 'enablefirewall'):
+            ('Pare-feu : Profil domaine activé', 'Pare-feu Windows', '0=désactivé CRITIQUE'),
+        ('software\\policies\\microsoft\\windowsfirewall\\standardprofile', 'enablefirewall'):
+            ('Pare-feu : Profil standard activé', 'Pare-feu Windows', '0=désactivé CRITIQUE'),
+        ('software\\policies\\microsoft\\windowsfirewall\\domainprofile', 'donotallowexceptions'):
+            ('Pare-feu : Pas d\'exceptions autorisées (domaine)', 'Pare-feu Windows', '1=strict'),
+        ('software\\policies\\microsoft\\windowsfirewall\\domainprofile', 'disablenotifications'):
+            ('Pare-feu : Notifications désactivées (domaine)', 'Pare-feu Windows', '1=pas de notification'),
+
+        # ── Internet Explorer / Edge ──
+        ('software\\policies\\microsoft\\internet explorer\\main', 'start page'):
+            ('IE/Edge : Page de démarrage', 'Navigateur', 'URL'),
+        ('software\\policies\\microsoft\\internet explorer\\control panel', 'homepage'):
+            ('IE : Page d\'accueil verrouillée', 'Navigateur', '1=verrouillé'),
+        ('software\\policies\\microsoft\\internet explorer\\security', 'lockdownsecuritylevel'):
+            ('IE : Niveau de sécurité verrouillé', 'Navigateur', ''),
+        ('software\\policies\\microsoft\\internet explorer\\restrictions', 'nohomepage'):
+            ('IE : Accès aux options désactivé', 'Navigateur', '1=désactivé'),
+
+        # ── Proxy ──
+        ('software\\policies\\microsoft\\windows\\currentversion\\internet settings', 'proxyenable'):
+            ('Proxy : Utiliser un proxy', 'Proxy / Internet', '1=oui'),
+        ('software\\policies\\microsoft\\windows\\currentversion\\internet settings', 'proxyserver'):
+            ('Proxy : Adresse du serveur proxy', 'Proxy / Internet', 'hôte:port'),
+        ('software\\policies\\microsoft\\windows\\currentversion\\internet settings', 'proxyoverride'):
+            ('Proxy : Exceptions proxy (bypass)', 'Proxy / Internet', 'liste'),
+        ('software\\policies\\microsoft\\windows\\currentversion\\internet settings', 'autoconfigurl'):
+            ('Proxy : URL de configuration automatique (PAC)', 'Proxy / Internet', 'URL .pac'),
+
+        # ── Antivirus / Defender ──
+        ('software\\policies\\microsoft\\windows defender', 'disableantispyware'):
+            ('Defender : Antispyware désactivé', 'Windows Defender', '1=désactivé CRITIQUE'),
+        ('software\\policies\\microsoft\\windows defender', 'disablerealtimemonitoring'):
+            ('Defender : Protection temps réel désactivée', 'Windows Defender', '1=désactivé CRITIQUE'),
+        ('software\\policies\\microsoft\\windows defender\\real-time protection', 'disablebehaviormonitoring'):
+            ('Defender : Surveillance comportementale désactivée', 'Windows Defender', '1=désactivé'),
+        ('software\\policies\\microsoft\\windows defender\\spynet', 'spynetreporting'):
+            ('Defender : Rapport cloud (MAPS)', 'Windows Defender', '0=désactivé,1=basique,2=avancé'),
+        ('software\\policies\\microsoft\\windows defender\\windows defender exploit guard\\asr', 'exasr_enabled'):
+            ('Defender : Attack Surface Reduction (ASR)', 'Windows Defender', '1=activé'),
+
+        # ── Mappage lecteurs / scripts ──
+        ('software\\policies\\microsoft\\windows\\system', 'enablelogonscriptdelay'):
+            ('Scripts : Délai script logon', 'Scripts & Démarrage', '0=pas de délai'),
+        ('software\\policies\\microsoft\\windows\\system', 'groupolicyrefreshtime'):
+            ('GPO : Intervalle de rafraîchissement (min)', 'Stratégie de groupe', 'minutes'),
+        ('software\\policies\\microsoft\\windows\\system', 'groupolicyrefrashtimeoffset'):
+            ('GPO : Décalage rafraîchissement (min)', 'Stratégie de groupe', 'minutes'),
+
+        # ── Restrictions utilisateur ──
+        ('software\\microsoft\\windows\\currentversion\\policies\\explorer', 'nodrivetypeautorun'):
+            ('AutoRun : Désactivé sur tous les lecteurs', 'Restrictions', '255=tout désactivé'),
+        ('software\\microsoft\\windows\\currentversion\\policies\\explorer', 'norun'):
+            ('Restrictions : Commande Exécuter désactivée', 'Restrictions', '1=désactivé'),
+        ('software\\microsoft\\windows\\currentversion\\policies\\explorer', 'nocontrolpanel'):
+            ('Restrictions : Panneau de configuration désactivé', 'Restrictions', '1=désactivé'),
+        ('software\\microsoft\\windows\\currentversion\\policies\\explorer', 'notaskmgr'):
+            ('Restrictions : Gestionnaire de tâches désactivé', 'Restrictions', '1=désactivé SUSPECT'),
+        ('software\\microsoft\\windows\\currentversion\\policies\\explorer', 'norecentdocshistory'):
+            ('Restrictions : Historique documents récents désactivé', 'Restrictions', '1=désactivé'),
+        ('software\\microsoft\\windows\\currentversion\\policies\\system', 'disableregistrytools'):
+            ('Restrictions : Éditeur de registre désactivé', 'Restrictions', '1=désactivé'),
+        ('software\\microsoft\\windows\\currentversion\\policies\\system', 'disabletaskmgr'):
+            ('Restrictions : Gestionnaire de tâches désactivé', 'Restrictions', '1=désactivé SUSPECT'),
+        ('software\\microsoft\\windows\\currentversion\\policies\\system', 'disablecmd'):
+            ('Restrictions : Invite de commandes désactivée', 'Restrictions', '1=désactivé'),
+
+        # ── Gestion des comptes / LAPS ──
+        ('software\\policies\\microsoft services\\admpwd', 'admpwdenabled'):
+            ('LAPS : Gestion mot de passe admin local activée', 'LAPS', '1=activé'),
+        ('software\\policies\\microsoft services\\admpwd', 'passwordcomplexity'):
+            ('LAPS : Complexité du mot de passe', 'LAPS', '4=max'),
+        ('software\\policies\\microsoft services\\admpwd', 'passwordlength'):
+            ('LAPS : Longueur du mot de passe admin', 'LAPS', 'caractères'),
+        ('software\\policies\\microsoft services\\admpwd', 'passwordagedays'):
+            ('LAPS : Durée de vie du mot de passe admin (jours)', 'LAPS', 'jours'),
+
+        # ── Chiffrement / TLS ──
+        ('system\\currentcontrolset\\control\\securityproviders\\schannel\\protocols\\tls 1.0\\server', 'enabled'):
+            ('TLS 1.0 Serveur : Activé', 'Chiffrement / TLS', '0=désactivé recommandé'),
+        ('system\\currentcontrolset\\control\\securityproviders\\schannel\\protocols\\tls 1.1\\server', 'enabled'):
+            ('TLS 1.1 Serveur : Activé', 'Chiffrement / TLS', '0=désactivé recommandé'),
+        ('system\\currentcontrolset\\control\\securityproviders\\schannel\\protocols\\ssl 2.0\\server', 'enabled'):
+            ('SSL 2.0 Serveur : Activé', 'Chiffrement / TLS', '0=désactivé CRITIQUE'),
+        ('system\\currentcontrolset\\control\\securityproviders\\schannel\\protocols\\ssl 3.0\\server', 'enabled'):
+            ('SSL 3.0 Serveur : Activé', 'Chiffrement / TLS', '0=désactivé CRITIQUE'),
+
+        # ── Audit avancé (via registre) ──
+        ('system\\currentcontrolset\\control\\lsa', 'auditbaseobjects'):
+            ('Audit : Objets de base du système', 'Audit', '1=activé'),
+        ('system\\currentcontrolset\\control\\lsa', 'fullprivilegeauditing'):
+            ('Audit : Tous les privilèges', 'Audit', '1=activé'),
+        ('software\\policies\\microsoft\\windows\\eventlog\\security', 'maxsize'):
+            ('Journal Sécurité : Taille max (Ko)', 'Journaux événements', 'Ko — recommandé ≥ 1048576'),
+        ('software\\policies\\microsoft\\windows\\eventlog\\application', 'maxsize'):
+            ('Journal Application : Taille max (Ko)', 'Journaux événements', 'Ko'),
+        ('software\\policies\\microsoft\\windows\\eventlog\\system', 'maxsize'):
+            ('Journal Système : Taille max (Ko)', 'Journaux événements', 'Ko'),
+        ('software\\policies\\microsoft\\windows\\eventlog\\security', 'retention'):
+            ('Journal Sécurité : Politique de rétention', 'Journaux événements', '0=écraser si nécessaire'),
+
+        # ── Imprimantes / spooler ──
+        ('system\\currentcontrolset\\control\\print\\providers\\lanman print services\\servers', 'addprinterdrivers'):
+            ('Spooler : Installation drivers restreinte aux admins', 'Impression', '1=admins seulement'),
+        ('software\\policies\\microsoft\\windows nt\\printers\\pointandprint', 'nopolicyapplicabletosystem'):
+            ('Point and Print : Restrictions désactivées', 'Impression', '1=CRITIQUE PrintNightmare'),
+        ('software\\policies\\microsoft\\windows nt\\printers\\pointandprint', 'trustedservers'):
+            ('Point and Print : Serveurs de confiance uniquement', 'Impression', '1=activé'),
+        ('software\\policies\\microsoft\\windows nt\\printers\\pointandprint', 'serverlist'):
+            ('Point and Print : Liste des serveurs autorisés', 'Impression', 'liste'),
+
+        # ── Dossiers de redirection ──
+        ('software\\policies\\microsoft\\windows\\system', 'allowx-zone-dereference'):
+            ('Redirection dossiers : Déréférencement cross-zone', 'Redirection', ''),
+        ('software\\policies\\microsoft\\windows\\system', 'folderredirectionsync'):
+            ('Redirection dossiers : Synchronisation', 'Redirection', ''),
+
+        # ── Misc sécurité ──
+        ('software\\microsoft\\windows\\currentversion\\policies\\system', 'enablelua'):
+            ('UAC : Activé (EnableLUA)', 'UAC', '1=activé'),
+        ('software\\microsoft\\windows\\currentversion\\policies\\system', 'consentpromptbehavioradmin'):
+            ('UAC : Comportement admins', 'UAC', '0=silencieux CRITIQUE,2=credentials,5=confirmation'),
+        ('software\\microsoft\\windows\\currentversion\\policies\\system', 'localaccounttokenfilterpolicy'):
+            ('UAC : Token plein comptes locaux réseau', 'UAC', '1=CRITIQUE Pass-the-Hash'),
+        ('system\\currentcontrolset\\control\\lsa', 'restrictanonymoussam'):
+            ('LSA : Restriction accès SAM anonyme', 'Sécurité LSA', '1=restreint'),
+        ('system\\currentcontrolset\\control\\lsa', 'everyoneincludesanonymous'):
+            ('LSA : Everyone inclut anonymes', 'Sécurité LSA', '0=recommandé'),
+        ('system\\currentcontrolset\\control\\lsa', 'lmcompatibilitylevel'):
+            ('NTLM : Niveau de compatibilité LM', 'Authentification', '5=NTLMv2 seulement'),
+        ('system\\currentcontrolset\\control\\lsa', 'nolmhash'):
+            ('NTLM : Ne pas stocker hash LM', 'Authentification', '1=recommandé'),
+        ('system\\currentcontrolset\\services\\lanmanserver\\parameters', 'requiresecuritysignature'):
+            ('SMB : Signature requise côté serveur', 'SMB', '1=requis'),
+        ('system\\currentcontrolset\\services\\lanmanworkstation\\parameters', 'requiresecuritysignature'):
+            ('SMB : Signature requise côté client', 'SMB', '1=requis'),
+        ('system\\currentcontrolset\\services\\lanmanserver\\parameters', 'smb1'):
+            ('SMB : SMBv1 activé', 'SMB', '0=désactivé recommandé'),
+        ('system\\currentcontrolset\\control\\securityproviders\\wdigest', 'uselogoncredential'):
+            ('WDigest : Mots de passe en clair dans lsass', 'Authentification', '0=désactivé recommandé'),
+    }
+
+    results = []
+    for (key, vname, rtype, val) in registry_entries:
+        k = key.lower().replace('hkey_local_machine\\', '').replace('hklm\\', '').replace('hkey_current_user\\', '').replace('hkcu\\', '')
+        n = vname.lower()
+        lookup = ADMX_MAP.get((k, n))
+
+        alert = None
+        if lookup:
+            label, category, hint = lookup
+            # Détecter les valeurs critiques
+            try:
+                vi = int(val)
+                if 'désactivé CRITIQUE' in hint and vi == 1:
+                    alert = f'CRITIQUE : {label}'
+                elif 'CRITIQUE' in hint and vi == 1:
+                    alert = f'Attention : {label}'
+                elif label in ('WDigest : Mots de passe en clair dans lsass',) and vi == 1:
+                    alert = 'WDigest actif — credentials exposés'
+                elif 'désactivé' in hint and vi == 0 and 'CRITIQUE' in hint:
+                    alert = f'CRITIQUE : valeur = 0'
+            except (ValueError, TypeError):
+                pass
+            results.append({
+                'key':      f"{k}\\{vname}",
+                'name':     vname,
+                'value':    str(val),
+                'label':    label,
+                'category': category,
+                'hint':     hint,
+                'alert':    alert,
+                'decoded':  True,
+            })
+        else:
+            # Clé non reconnue — afficher quand même mais sans label
+            short = key.split('\\')[-1]
+            results.append({
+                'key':      f"{k}\\{vname}",
+                'name':     vname,
+                'value':    str(val),
+                'label':    f"{short} → {vname}",
+                'category': 'Registre',
+                'hint':     '',
+                'alert':    None,
+                'decoded':  False,
+            })
+    return results
+
+
 def parse_gpttmpl(content: str) -> dict:
     """Parse GptTmpl.inf → dict {section: {clé_lowercase: valeur}}"""
     result = {}
@@ -1837,6 +2336,58 @@ def build_search_index(gpos: list) -> list:
         for f in gpo.get('_findings_preview', []):
             _add(gpo, 'Constatation sécurité', '🔒',
                  f.get('title', ''), f.get('severity', ''), f.get('category', ''))
+
+        # ── Logiciels / Applications ─────────────────────────────────────────
+        for scope, key in [('Machine', 'software_machine'), ('Utilisateur', 'software_user')]:
+            for s in gpo.get(key, []):
+                _add(gpo, f'Logiciel ({scope})', '📦',
+                     s.get('name', ''), s.get('path', ''),
+                     f"Action: {s.get('action','')} | {s.get('publisher','')}")
+
+        # ── Partages réseau ──────────────────────────────────────────────────
+        for s in gpo.get('network_shares', []):
+            _add(gpo, 'Partage réseau', '🗂',
+                 s.get('name', ''), s.get('path', ''),
+                 f"Action: {s.get('action','')} | {s.get('comment','')}")
+
+        # ── Sources ODBC ─────────────────────────────────────────────────────
+        for scope, key in [('Machine', 'datasources_machine'), ('Utilisateur', 'datasources_user')]:
+            for d in gpo.get(key, []):
+                _add(gpo, f'Source ODBC ({scope})', '🗃',
+                     d.get('name', ''), d.get('driver', ''),
+                     f"Serveur: {d.get('server','')} | DB: {d.get('db','')}")
+
+        # ── Proxy / Internet ─────────────────────────────────────────────────
+        for s in gpo.get('internet_settings', []):
+            _add(gpo, 'Proxy / Internet', '🌐',
+                 s.get('proxy', ''), s.get('home', ''),
+                 f"Bypass: {s.get('bypass','')}")
+
+        # ── Options réseau / VPN ─────────────────────────────────────────────
+        for n in gpo.get('network_options', []):
+            _add(gpo, f"Réseau {n.get('type','VPN')}", '🔌',
+                 n.get('name', ''), n.get('server', ''), n.get('action', ''))
+
+        # ── Dossiers ─────────────────────────────────────────────────────────
+        for scope, key in [('Machine', 'folders_machine'), ('Utilisateur', 'folders_user')]:
+            for f in gpo.get(key, []):
+                _add(gpo, f'Dossier ({scope})', '📁',
+                     f.get('path', ''), f.get('action', ''), '')
+
+        # ── Fichiers INI ─────────────────────────────────────────────────────
+        for scope, key in [('Machine', 'ini_files_machine'), ('Utilisateur', 'ini_files_user')]:
+            for i in gpo.get(key, []):
+                _add(gpo, f'Fichier INI ({scope})', '📝',
+                     f"{i.get('path','')} [{i.get('section','')}]",
+                     f"{i.get('property','')} = {i.get('value','')}", '')
+
+        # ── Paramètres ADMX décodés ───────────────────────────────────────────
+        for scope, key in [('Machine', 'registry_admx'), ('Utilisateur', 'registry_admx_user')]:
+            for r in gpo.get(key, []):
+                _add(gpo, f"Paramètre ADMX ({r.get('category','Registre')})", '⚙',
+                     r.get('label', r.get('name', '')),
+                     r.get('value', ''),
+                     f"{r.get('hint','')} | {r.get('key','')}")
 
     return index
 
@@ -2516,6 +3067,49 @@ class GPOCollector:
         x = rt('Machine', 'Microsoft', 'Windows NT', 'Audit', 'audit.csv')
         if x: gpo['audit_csv'] = parse_audit_csv(x)
 
+        # ── Nouveaux parseurs ──
+        x = rx('Machine', 'Preferences', 'Applications', 'Applications.xml')
+        if x: gpo['software_machine'] = parse_software_xml(x)
+
+        x = rx('User', 'Preferences', 'Applications', 'Applications.xml')
+        if x: gpo['software_user'] = parse_software_xml(x)
+
+        x = rx('Machine', 'Preferences', 'IniFiles', 'IniFiles.xml')
+        if x: gpo['ini_files_machine'] = parse_ini_files_xml(x)
+
+        x = rx('User', 'Preferences', 'IniFiles', 'IniFiles.xml')
+        if x: gpo['ini_files_user'] = parse_ini_files_xml(x)
+
+        x = rx('Machine', 'Preferences', 'DataSources', 'DataSources.xml')
+        if x: gpo['datasources_machine'] = parse_datasources_xml(x)
+
+        x = rx('User', 'Preferences', 'DataSources', 'DataSources.xml')
+        if x: gpo['datasources_user'] = parse_datasources_xml(x)
+
+        x = rx('User', 'Preferences', 'InternetSettings', 'InternetSettings.xml')
+        if x: gpo['internet_settings'] = parse_internet_settings_xml(x)
+
+        x = rx('Machine', 'Preferences', 'NetworkShares', 'NetworkShares.xml')
+        if x: gpo['network_shares'] = parse_network_shares_xml(x)
+
+        x = rx('Machine', 'Preferences', 'Folders', 'Folders.xml')
+        if x: gpo['folders_machine'] = parse_folders_xml(x)
+
+        x = rx('User', 'Preferences', 'Folders', 'Folders.xml')
+        if x: gpo['folders_user'] = parse_folders_xml(x)
+
+        x = rx('User', 'Preferences', 'Regional', 'Regional.xml')
+        if x: gpo['regional'] = parse_regional_xml(x)
+
+        x = rx('User', 'Preferences', 'NetworkOptions', 'NetworkOptions.xml')
+        if x: gpo['network_options'] = parse_network_options_xml(x)
+
+        # Décodage ADMX des clés Registry.pol
+        if gpo.get('registry_entries'):
+            gpo['registry_admx'] = parse_admx_registry(gpo['registry_entries'])
+        if gpo.get('registry_entries_user'):
+            gpo['registry_admx_user'] = parse_admx_registry(gpo['registry_entries_user'])
+
         # psscripts.ini (PowerShell) — complète scripts.ini
         ps_m = rt('Machine', 'Scripts', 'psscripts.ini')
         ps_u = rt('User', 'Scripts', 'psscripts.ini')
@@ -2576,6 +3170,14 @@ class GPOCollector:
         if gpo.get('files_machine') or gpo.get('files_user'): parts.append('fichiers')
         if gpo.get('services'): parts.append('services')
         if gpo.get('audit_csv'): parts.append('audit avancé')
+        if gpo.get('software_machine') or gpo.get('software_user'): parts.append('logiciels')
+        if gpo.get('network_shares'): parts.append('partages réseau')
+        if gpo.get('datasources_machine') or gpo.get('datasources_user'): parts.append('ODBC')
+        if gpo.get('internet_settings'): parts.append('proxy/internet')
+        if gpo.get('network_options'): parts.append('VPN/réseau')
+        if gpo.get('folders_machine') or gpo.get('folders_user'): parts.append('dossiers')
+        if gpo.get('ini_files_machine') or gpo.get('ini_files_user'): parts.append('INI')
+        if gpo.get('registry_admx'): parts.append(f"{len(gpo['registry_admx'])} clés ADMX")
         if parts:
             print(f"    [+] {gpo['name']} : {', '.join(parts)}")
 
@@ -3074,6 +3676,128 @@ def _format_gpo_content(gpo: dict) -> list:
                 'alert': a.get('alert'),
             })
         sections.append({'title': 'Audit avancé (audit.csv)', 'icon': '🔍', 'params': params})
+
+    # ── Registre décodé ADMX (Machine) ──────────────────────────────────────
+    admx = gpo.get('registry_admx', [])
+    if admx:
+        # Grouper par catégorie
+        by_cat = {}
+        for r in admx:
+            cat = r.get('category', 'Registre')
+            by_cat.setdefault(cat, []).append(r)
+        for cat, items in sorted(by_cat.items()):
+            params = []
+            for r in items:
+                params.append({
+                    'key':   r['label'],
+                    'value': r['value'],
+                    'label': r['label'],
+                    'hint':  r.get('hint', ''),
+                    'alert': r.get('alert'),
+                })
+            sections.append({'title': f'Paramètres ADMX — {cat} (Machine)', 'icon': '⚙', 'params': params})
+
+    # ── Registre décodé ADMX (Utilisateur) ──────────────────────────────────
+    admx_u = gpo.get('registry_admx_user', [])
+    if admx_u:
+        by_cat = {}
+        for r in admx_u:
+            cat = r.get('category', 'Registre')
+            by_cat.setdefault(cat, []).append(r)
+        for cat, items in sorted(by_cat.items()):
+            params = []
+            for r in items:
+                params.append({
+                    'key':   r['label'],
+                    'value': r['value'],
+                    'label': r['label'],
+                    'hint':  r.get('hint', ''),
+                    'alert': r.get('alert'),
+                })
+            sections.append({'title': f'Paramètres ADMX — {cat} (Utilisateur)', 'icon': '⚙', 'params': params})
+
+    # ── Logiciels / Applications ─────────────────────────────────────────────
+    for scope, key in [('Machine', 'software_machine'), ('Utilisateur', 'software_user')]:
+        items = gpo.get(key, [])
+        if items:
+            params = []
+            for s in items:
+                alert = None
+                if s['action'] == 'Désinstaller':
+                    alert = f"Désinstalle : {s['name']}"
+                params.append({
+                    'key':   s['name'],
+                    'value': s['path'] or '',
+                    'label': f"{s['action']}{' v'+s['version'] if s.get('version') else ''}{' · '+s['publisher'] if s.get('publisher') else ''}",
+                    'hint':  '',
+                    'alert': alert,
+                })
+            sections.append({'title': f'Logiciels / Applications — {scope}', 'icon': '📦', 'params': params})
+
+    # ── Partages réseau ──────────────────────────────────────────────────────
+    shares = gpo.get('network_shares', [])
+    if shares:
+        params = [{'key': s['name'], 'value': s['path'], 'label': s['action'],
+                   'hint': s.get('comment', ''), 'alert': None} for s in shares]
+        sections.append({'title': 'Partages réseau', 'icon': '🗂', 'params': params})
+
+    # ── Sources de données ODBC ──────────────────────────────────────────────
+    for scope, key in [('Machine', 'datasources_machine'), ('Utilisateur', 'datasources_user')]:
+        items = gpo.get(key, [])
+        if items:
+            params = [{'key': d['name'], 'value': d.get('server', '') + ('/' + d.get('db', '') if d.get('db') else ''),
+                       'label': d.get('driver', ''), 'hint': d.get('scope', ''), 'alert': None} for d in items]
+            sections.append({'title': f'Sources de données ODBC — {scope}', 'icon': '🗃', 'params': params})
+
+    # ── Paramètres Internet / Proxy ──────────────────────────────────────────
+    inet = gpo.get('internet_settings', [])
+    if inet:
+        params = []
+        for s in inet:
+            if s.get('proxy'):
+                params.append({'key': 'Serveur proxy', 'value': s['proxy'],
+                               'label': 'Activé' if s.get('enabled') else 'Désactivé',
+                               'hint': f"Bypass : {s.get('bypass', '')}", 'alert': None})
+            if s.get('home'):
+                params.append({'key': 'Page d\'accueil', 'value': s['home'],
+                               'label': '', 'hint': '', 'alert': None})
+        if params:
+            sections.append({'title': 'Paramètres Internet / Proxy', 'icon': '🌐', 'params': params})
+
+    # ── Options réseau / VPN ─────────────────────────────────────────────────
+    netopts = gpo.get('network_options', [])
+    if netopts:
+        params = [{'key': n['name'], 'value': n.get('server', ''),
+                   'label': n['type'], 'hint': n.get('action', ''), 'alert': None} for n in netopts]
+        sections.append({'title': 'Options réseau / VPN', 'icon': '🔌', 'params': params})
+
+    # ── Dossiers ─────────────────────────────────────────────────────────────
+    for scope, key in [('Machine', 'folders_machine'), ('Utilisateur', 'folders_user')]:
+        items = gpo.get(key, [])
+        if items:
+            params = [{'key': f['path'], 'value': f['action'],
+                       'label': f['action'], 'hint': '', 'alert': None} for f in items]
+            sections.append({'title': f'Dossiers — {scope}', 'icon': '📁', 'params': params})
+
+    # ── Fichiers INI ─────────────────────────────────────────────────────────
+    for scope, key in [('Machine', 'ini_files_machine'), ('Utilisateur', 'ini_files_user')]:
+        items = gpo.get(key, [])
+        if items:
+            params = [{'key': f"{i['path']} [{i['section']}]", 'value': f"{i['property']} = {i['value']}",
+                       'label': i['action'] or '', 'hint': '', 'alert': None} for i in items]
+            sections.append({'title': f'Fichiers INI — {scope}', 'icon': '📝', 'params': params})
+
+    # ── Paramètres régionaux ─────────────────────────────────────────────────
+    regional = gpo.get('regional', [])
+    if regional:
+        params = []
+        for r in regional:
+            if r.get('locale'):
+                params.append({'key': 'Paramètres régionaux', 'value': r['locale'], 'label': '', 'hint': '', 'alert': None})
+            if r.get('timezone'):
+                params.append({'key': 'Fuseau horaire', 'value': r['timezone'], 'label': '', 'hint': '', 'alert': None})
+        if params:
+            sections.append({'title': 'Paramètres régionaux', 'icon': '🌍', 'params': params})
 
     # ── Préférences Registre XML ──
     for scope, key in [('Machine', 'registry_xml_machine'), ('Utilisateur', 'registry_xml_user')]:
