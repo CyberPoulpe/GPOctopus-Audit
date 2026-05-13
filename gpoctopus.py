@@ -2159,15 +2159,18 @@ def build_search_index(gpos: list) -> list:
     }
 
     def _add(gpo, type_, icon, key, value, context=''):
-        # search_blob est construit côté JS au premier chargement — pas besoin de le sérialiser
+        # Tronquer les valeurs très longues pour ne pas gonfler le JSON
+        key_s   = str(key)[:120]   if key   else ''
+        val_s   = str(value)[:80]  if value else ''
+        ctx_s   = str(context)[:80] if context else ''
         index.append({
             'gpo_name':  gpo['name'],
             'gpo_guid':  gpo['guid'],
             'type':      type_,
             'type_icon': icon,
-            'key':       key,
-            'value':     str(value) if value is not None else '',
-            'context':   context,
+            'key':       key_s,
+            'value':     val_s,
+            'context':   ctx_s,
         })
 
     for gpo in gpos:
@@ -2189,17 +2192,24 @@ def build_search_index(gpos: list) -> list:
                 key_label = KEY_LABELS.get(k.lower(), k)
                 _add(gpo, sec_label, sec_icon, key_label, v, section)
 
-        # ── Registry.pol (binaire) ──────────────────────────────────────────
+        # ── Registry.pol — indexer via ADMX décodé (plus lisible, pas de doublon) ──
+        # On n'indexe PAS les registry_entries brutes pour éviter de gonfler le JSON.
+        # Les clés ADMX décodées sont indexées plus bas (registry_admx).
+        # On indexe seulement les clés non décodées (sans label ADMX).
+        admx_keys = {r['key'].lower() for r in gpo.get('registry_admx', [])}
         for (reg_key, vname, rtype, val) in gpo.get('registry_entries', []):
-            short_key = reg_key.split('\\')[-1]
-            _add(gpo, 'Registre (Registry.pol)', '🗝',
-                 f"{short_key} → {vname}", str(val), reg_key)
+            full = f"{reg_key.lower()}\\{vname.lower()}"
+            if full not in admx_keys:  # seulement si pas déjà couvert par ADMX
+                short_key = reg_key.split('\\')[-1]
+                _add(gpo, 'Registre (Registry.pol)', '🗝',
+                     f"{short_key} → {vname}", str(val), reg_key)
 
-        # ── Registry.pol utilisateur ─────────────────────────────────────────
         for (reg_key, vname, rtype, val) in gpo.get('registry_entries_user', []):
-            short_key = reg_key.split('\\')[-1]
-            _add(gpo, 'Registre utilisateur (Registry.pol)', '🗝',
-                 f"{short_key} → {vname}", str(val), reg_key)
+            full = f"{reg_key.lower()}\\{vname.lower()}"
+            if full not in admx_keys:
+                short_key = reg_key.split('\\')[-1]
+                _add(gpo, 'Registre utilisateur (Registry.pol)', '🗝',
+                     f"{short_key} → {vname}", str(val), reg_key)
 
         # ── Imprimantes Machine ──────────────────────────────────────────────
         for p in gpo.get('printers', []):
@@ -2389,7 +2399,7 @@ def build_search_index(gpos: list) -> list:
                      r.get('value', ''),
                      f"{r.get('hint','')} | {r.get('key','')}")
 
-    return index
+    return index[:30000]  # Cap global — évite un JSON géant sur les très grands AD
 
 
 
@@ -3935,8 +3945,13 @@ def analyze_gpos(gpos: list) -> dict:
             'has_content': has_content,
             'wmi_filter':  gpo.get('wmi_filter'),  # filtre WMI éventuel
         })
-        # Index de contenu séparé — chargé uniquement quand on ouvre une GPO
-        gpo_content_index[gpo['guid']] = content_sections
+        # Index de contenu — exclure les sections de registre brutes (trop volumineuses)
+        # On garde uniquement les sections décodées/lisibles
+        EXCLUDE_TITLES = {'Registre Windows — Machine (Registry.pol)',
+                          'Registre Windows — Utilisateur (Registry.pol)'}
+        content_sections_slim = [s for s in content_sections
+                                  if s['title'] not in EXCLUDE_TITLES or len(s.get('params', [])) <= 20]
+        gpo_content_index[gpo['guid']] = content_sections_slim
 
     # 3. Redondances (même paramètre dans plusieurs GPO)
     param_seen = {}
@@ -5178,13 +5193,29 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
 
 <!-- ══ DONNÉES ══════════════════════════════════════════════════════════════ -->
 <script id="gpo-json" type="application/json">{{ data.gpo_reports | tojson }}</script>
+<script id="content-index-json" type="application/json">{{ data.gpo_content_index | tojson }}</script>
+<script id="search-index-json" type="application/json">{{ data.search_index | tojson }}</script>
 <script>
 // ══════════════════════════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════════════════════════
 let _gpos = [];
-const _gpoContentIndex = {{ data.gpo_content_index | tojson }};
-const _searchIndex     = {{ data.search_index | tojson }};
+// _gpoContentIndex chargé depuis le tag JSON dédié (différé pour accélérer le démarrage)
+let _gpoContentIndex = {};
+(function(){
+  try {
+    const el = document.getElementById('content-index-json');
+    if (el) _gpoContentIndex = JSON.parse(el.textContent);
+  } catch(e) { console.warn('content-index-json parse error', e); }
+})();
+// _searchIndex chargé depuis le tag JSON dédié
+let _searchIndex = [];
+(function(){
+  try {
+    const el = document.getElementById('search-index-json');
+    if (el) _searchIndex = JSON.parse(el.textContent);
+  } catch(e) { console.warn('search-index-json parse error', e); }
+})();
 const _findingsData    = {{ data.all_findings | tojson }};
 const _conflictsData   = {{ data.gpo_conflicts | tojson }};
 
