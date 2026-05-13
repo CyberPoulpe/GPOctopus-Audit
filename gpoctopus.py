@@ -2125,17 +2125,51 @@ class GPOCollector:
 
     def get_gpos_from_ldap(self):
         gpo_dn = f"CN=Policies,CN=System,{self.base_dn}"
-        self.conn.search(
-            search_base=gpo_dn,
-            search_filter='(objectClass=groupPolicyContainer)',
-            search_scope=SUBTREE,
-            attributes=['displayName', 'cn', 'gPCFileSysPath',
-                        'versionNumber', 'flags', 'whenCreated', 'whenChanged',
-                        'gPCWQLFilter'],
-        )
+
+        # Essai 1 : recherche avec paging (nécessaire si > ~100 GPO)
+        # Essai 2 : sans paging si le DC ne le supporte pas
+        entries = []
+        for paged_size in [500, 0]:
+            try:
+                self.conn.search(
+                    search_base=gpo_dn,
+                    search_filter='(objectClass=groupPolicyContainer)',
+                    search_scope=SUBTREE,
+                    attributes=['displayName', 'cn', 'gPCFileSysPath',
+                                'versionNumber', 'flags', 'whenCreated', 'whenChanged',
+                                'gPCWQLFilter'],
+                    paged_size=paged_size if paged_size else None,
+                    paged_cookie=None,
+                )
+                entries = list(self.conn.entries)
+                # Récupérer les pages suivantes si paging actif
+                if paged_size:
+                    while True:
+                        cookie = self.conn.result.get('controls', {}).get(
+                            '1.2.840.113556.1.4.319', {}).get('value', {}).get('cookie')
+                        if not cookie:
+                            break
+                        self.conn.search(
+                            search_base=gpo_dn,
+                            search_filter='(objectClass=groupPolicyContainer)',
+                            search_scope=SUBTREE,
+                            attributes=['displayName', 'cn', 'gPCFileSysPath',
+                                        'versionNumber', 'flags', 'whenCreated', 'whenChanged',
+                                        'gPCWQLFilter'],
+                            paged_size=paged_size,
+                            paged_cookie=cookie,
+                        )
+                        entries += list(self.conn.entries)
+                break  # succès
+            except Exception as e:
+                if paged_size == 0:
+                    print(f"[!] Erreur LDAP get_gpos : {e}")
+                    return []
+                # Réessayer sans paging
+                continue
         wmi_filters = self._get_wmi_filters()
         gpos = []
-        for entry in self.conn.entries:
+        for entry in entries:
             # entry_attributes_as_dict évite LDAPCursorAttributeError
             # quand un attribut est absent (comportement selon la version de ldap3)
             attrs = entry.entry_attributes_as_dict
@@ -2213,12 +2247,39 @@ class GPOCollector:
         return filters
 
     def get_gpo_links(self):
-        self.conn.search(
-            search_base=self.base_dn,
-            search_filter='(gPLink=*)',
-            search_scope=SUBTREE,
-            attributes=['distinguishedName', 'gPLink'],
-        )
+        # Recherche avec paging pour les grands domaines (beaucoup d'OU)
+        entries = []
+        for paged_size in [500, 0]:
+            try:
+                self.conn.search(
+                    search_base=self.base_dn,
+                    search_filter='(gPLink=*)',
+                    search_scope=SUBTREE,
+                    attributes=['distinguishedName', 'gPLink'],
+                    paged_size=paged_size if paged_size else None,
+                )
+                entries = list(self.conn.entries)
+                if paged_size:
+                    while True:
+                        cookie = self.conn.result.get('controls', {}).get(
+                            '1.2.840.113556.1.4.319', {}).get('value', {}).get('cookie')
+                        if not cookie:
+                            break
+                        self.conn.search(
+                            search_base=self.base_dn,
+                            search_filter='(gPLink=*)',
+                            search_scope=SUBTREE,
+                            attributes=['distinguishedName', 'gPLink'],
+                            paged_size=paged_size,
+                            paged_cookie=cookie,
+                        )
+                        entries += list(self.conn.entries)
+                break
+            except Exception:
+                if paged_size == 0:
+                    break
+                continue
+
         links = {}
         # Regex robuste : UUID format standard dans un bloc [LDAP://...;flag]
         GPLINK_RE = re.compile(
@@ -2226,7 +2287,7 @@ class GPOCollector:
             r'-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\}[^;]*;(\d+)\]',
             re.IGNORECASE
         )
-        for entry in self.conn.entries:
+        for entry in entries:
             attrs = entry.entry_attributes_as_dict
             def _g(k, d=''):
                 v = attrs.get(k) or attrs.get(k.lower())
