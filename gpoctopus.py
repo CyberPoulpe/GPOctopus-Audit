@@ -2738,9 +2738,36 @@ def evaluate_rule_on_rsop(rule: dict, rsop_settings: dict, rsop_registry: dict) 
         return None  # conforme
 
     # ── Règles GptTmpl.inf ───────────────────────────────────────────────────
-    sec      = rsop_settings.get(section, {})
+    sec       = rsop_settings.get(section, {})
     check_key = rule.get('check_key', '').lower()
-    raw      = sec.get(check_key) if sec else None
+    raw       = sec.get(check_key) if sec else None
+
+    # Certains paramètres "Options de sécurité" peuvent être dans [Registry Values]
+    # plutôt que dans [System Access] selon la façon dont la GPO est configurée.
+    # Ex: LmCompatibilityLevel, NoLMHash → format "type,valeur" dans registry_values
+    REGVAL_ALIASES = {
+        # (check_key, section) → clé dans registry_values
+        ('lmcompatibilitylevel', 'system_access'):
+            'machine\\system\\currentcontrolset\\control\\lsa\\lmcompatibilitylevel',
+        ('nolmhash', 'system_access'):
+            'machine\\system\\currentcontrolset\\control\\lsa\\nolmhash',
+        ('restrictanonymous', 'system_access'):
+            'machine\\system\\currentcontrolset\\control\\lsa\\restrictanonymous',
+        ('enableguestaccount', 'system_access'):
+            'machine\\software\\microsoft\\windows nt\\currentversion\\winlogon\\enableguestaccount',
+    }
+
+    if raw is None:
+        # Chercher dans registry_values du GptTmpl.inf (format "type,valeur")
+        alias_key = REGVAL_ALIASES.get((check_key, section))
+        if alias_key:
+            regval_raw = rsop_settings.get('registry_values', {}).get(alias_key)
+            if regval_raw:
+                # Extraire la valeur entière depuis "type,valeur"
+                try:
+                    raw = str(int(regval_raw.split(',')[-1].strip()))
+                except (ValueError, IndexError):
+                    pass
 
     if raw is None:
         # Paramètre absent de toutes les GPO
@@ -2805,6 +2832,29 @@ def evaluate_rule_on_gpo(rule: dict, settings: dict, registry_entries: list) -> 
     sec = settings.get(section, {})
     check_key = rule.get('check_key', '').lower()
     raw = sec.get(check_key)
+
+    # Même logique que evaluate_rule_on_rsop :
+    # certains paramètres Options de sécurité sont dans [Registry Values]
+    REGVAL_ALIASES = {
+        ('lmcompatibilitylevel', 'system_access'):
+            'machine\\system\\currentcontrolset\\control\\lsa\\lmcompatibilitylevel',
+        ('nolmhash', 'system_access'):
+            'machine\\system\\currentcontrolset\\control\\lsa\\nolmhash',
+        ('restrictanonymous', 'system_access'):
+            'machine\\system\\currentcontrolset\\control\\lsa\\restrictanonymous',
+        ('enableguestaccount', 'system_access'):
+            'machine\\software\\microsoft\\windows nt\\currentversion\\winlogon\\enableguestaccount',
+    }
+    if raw is None:
+        alias_key = REGVAL_ALIASES.get((check_key, section))
+        if alias_key:
+            regval_raw = settings.get('registry_values', {}).get(alias_key)
+            if regval_raw:
+                try:
+                    raw = str(int(regval_raw.split(',')[-1].strip()))
+                except (ValueError, IndexError):
+                    pass
+
     if raw is None:
         return None  # GPO ne configure pas ce paramètre → pas un finding sur cette GPO
 
