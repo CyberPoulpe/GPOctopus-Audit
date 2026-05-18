@@ -4191,8 +4191,11 @@ DEFAULT_GPOS = {
         'purpose': 'Politique de mots de passe et de verrouillage du domaine uniquement',
         'should_contain': ['password_policy', 'system_access', 'kerberos_policy'],
         'should_not_contain': [
-            'registry_entries', 'printers', 'drives', 'scripts',
-            'scheduled_tasks', 'groups', 'registry_xml_machine',
+            # registry_entries (Registry.pol) est normal — contient les paramètres ADMX
+            # registry_xml_machine (préférences registre) est différent — c'est suspect
+            'registry_xml_machine',
+            'printers', 'drives', 'scripts',
+            'scheduled_tasks', 'groups',
         ],
     },
     '{6AC1786C-016F-11D2-945F-00C04FB984F9}': {
@@ -4200,8 +4203,10 @@ DEFAULT_GPOS = {
         'purpose': 'Droits utilisateurs sur les contrôleurs de domaine uniquement',
         'should_contain': ['privilege_rights', 'event_audit'],
         'should_not_contain': [
-            'registry_entries', 'printers', 'drives', 'scripts',
-            'scheduled_tasks', 'groups', 'registry_xml_machine',
+            # registry_entries (Registry.pol/ADMX) acceptable
+            'registry_xml_machine',
+            'printers', 'drives', 'scripts',
+            'scheduled_tasks', 'groups',
             'password_policy',
         ],
     },
