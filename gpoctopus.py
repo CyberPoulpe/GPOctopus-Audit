@@ -157,7 +157,7 @@ AUDIT_RULES = [
         "threshold": 14,
         "operator": "lt",
         "detail_ok": "Longueur minimale correctement configurée (≥ 14 caractères)",
-        "remediation": "Configurer MinimumPasswordLength ≥ 14 dans la GPO de politique de mots de passe.\nChemin GPO : Configuration ordinateur → Paramètres Windows → Paramètres de sécurité → Stratégies de compte → Stratégie de mot de passe.",
+        "remediation": "Valeur recommandée : ≥ 14 caractères\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies de compte\n                  └─ Stratégie de mot de passe\n                      └─ Longueur minimale du mot de passe → 14 (ou plus)\n\n⚠ S'applique uniquement à la Default Domain Policy pour les comptes du domaine.\nLes comptes locaux sont gérés par la stratégie locale de chaque machine.",
     },
     {
         "id": "PWD-002",
@@ -172,7 +172,7 @@ AUDIT_RULES = [
         "threshold": 24,
         "operator": "lt",
         "detail_ok": "Historique des mots de passe correct (≥ 24)",
-        "remediation": "Configurer PasswordHistorySize ≥ 24 pour empêcher la réutilisation cyclique.\nSans historique, un utilisateur peut alterner 2 mots de passe indéfiniment.",
+        "remediation": "Valeur recommandée : ≥ 24\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies de compte\n                  └─ Stratégie de mot de passe\n                      └─ Conserver l'historique des mots de passe → 24\n\n⚠ Doit être combiné avec MinimumPasswordAge ≥ 1 jour pour être efficace.",
     },
     {
         "id": "PWD-003",
@@ -187,7 +187,7 @@ AUDIT_RULES = [
         "threshold": 1,
         "operator": "ne",
         "detail_ok": "Complexité du mot de passe activée",
-        "remediation": "Activer PasswordComplexity = 1.\nExige : majuscule, minuscule, chiffre ou caractère spécial, pas de nom de compte.",
+        "remediation": "Valeur recommandée : Activé\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies de compte\n                  └─ Stratégie de mot de passe\n                      └─ Le mot de passe doit respecter des exigences de complexité → Activé\n\nExige que le mot de passe contienne des caractères de 3 catégories parmi :\nmajuscules, minuscules, chiffres, caractères spéciaux — et ne contienne pas le nom de compte.",
     },
     {
         "id": "PWD-004",
@@ -202,7 +202,7 @@ AUDIT_RULES = [
         "threshold": 365,
         "operator": "gt_or_zero",
         "detail_ok": "Durée maximale du mot de passe dans les limites recommandées",
-        "remediation": "Configurer MaximumPasswordAge entre 60 et 365 jours.\n0 = illimité = un mot de passe compromis reste valide indéfiniment.",
+        "remediation": "Valeur recommandée : Entre 60 et 365 jours (ANSSI recommande 90 jours)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies de compte\n                  └─ Stratégie de mot de passe\n                      └─ Durée de vie maximale du mot de passe → 90 jours\n\n⚠ Valeur 0 = illimité = un mot de passe compromis reste valide indéfiniment.",
     },
     {
         "id": "PWD-006",
@@ -217,7 +217,7 @@ AUDIT_RULES = [
         "threshold": 1,
         "operator": "lt",
         "detail_ok": "Durée minimale du mot de passe correctement configurée",
-        "remediation": "Configurer MinimumPasswordAge ≥ 1 jour.\nSans durée minimale, un utilisateur peut changer son mot de passe 24 fois d'affilée pour retrouver l'ancien (contourne l'historique).",
+        "remediation": "Valeur recommandée : ≥ 1 jour\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies de compte\n                  └─ Stratégie de mot de passe\n                      └─ Durée de vie minimale du mot de passe → 1 jour\n\nSans cette valeur, un utilisateur peut changer son mot de passe 24 fois d'affilée\npour retrouver l'ancien et contourner l'historique.",
     },
 
     # ══ AUTHENTIFICATION RÉSEAU ════════════════════════════════════════════════
@@ -234,7 +234,7 @@ AUDIT_RULES = [
         "threshold": 1,
         "operator": "ne",
         "detail_ok": "Stockage des hash LM désactivé",
-        "remediation": "Configurer NoLMHash = 1 (activé).\nChemin GPO : Paramètres de sécurité → Options de sécurité → 'Sécurité réseau : ne pas stocker de valeur de hachage LAN Manager lors de la prochaine modification du mot de passe'.",
+        "remediation": "Valeur recommandée : Activé (= 1)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Options de sécurité\n                      └─ Sécurité réseau : ne pas stocker de valeur de hachage LAN Manager\n                         lors de la prochaine modification du mot de passe → Activé",
     },
     {
         "id": "AUTH-002",
@@ -249,7 +249,7 @@ AUDIT_RULES = [
         "threshold": 5,
         "operator": "lt",
         "detail_ok": "Niveau NTLM correctement configuré (NTLMv2 uniquement)",
-        "remediation": "Configurer LmCompatibilityLevel = 5.\nChemin GPO : Options de sécurité → 'Sécurité réseau : niveau d'authentification LAN Manager'.\nATTENTION : tester avant déploiement — les équipements anciens (NAS, imprimantes) peuvent ne supporter que NTLMv1.",
+        "remediation": "Valeur recommandée : 5 (Envoyer uniquement les réponses NTLMv2, refuser LM et NTLM)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Options de sécurité\n                      └─ Sécurité réseau : niveau d'authentification LAN Manager → 5\n\nNiveaux disponibles :\n  0 = Envoyer réponses LM et NTLM (le pire)\n  3 = Envoyer uniquement NTLMv2 (défaut Windows)\n  5 = Envoyer NTLMv2 uniquement, refuser LM et NTLM en entrée (recommandé)\n\n⚠ Tester avant déploiement — les NAS/photocopieurs anciens peuvent ne supporter que NTLMv1.",
     },
     {
         "id": "AUTH-003",
@@ -264,7 +264,7 @@ AUDIT_RULES = [
         "threshold": 10,
         "operator": "gt_or_zero",
         "detail_ok": "Seuil de verrouillage correctement configuré",
-        "remediation": "Configurer LockoutBadCount entre 5 et 10 tentatives.\n0 = aucun verrouillage = attaque par force brute illimitée possible.\nChemin GPO : Stratégies de compte → Stratégie de verrouillage du compte.",
+        "remediation": "Valeur recommandée : Entre 5 et 10 tentatives\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies de compte\n                  └─ Stratégie de verrouillage du compte\n                      └─ Seuil de verrouillage du compte → 5 à 10 tentatives\n\n⚠ Valeur 0 = aucun verrouillage = attaque par force brute illimitée possible.",
     },
     {
         "id": "AUTH-004",
@@ -279,7 +279,7 @@ AUDIT_RULES = [
         "threshold": 15,
         "operator": "lt",
         "detail_ok": "Durée de verrouillage correctement configurée",
-        "remediation": "Configurer LockoutDuration ≥ 15 minutes (0 = verrouillage jusqu'à déverrouillage manuel par admin).",
+        "remediation": "Valeur recommandée : ≥ 15 minutes (ou 0 pour verrouillage permanent jusqu'à déblocage admin)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies de compte\n                  └─ Stratégie de verrouillage du compte\n                      └─ Durée du verrouillage du compte → 15 (ou 0 pour manuel)",
     },
 
     # ══ DROITS & ACCÈS ═════════════════════════════════════════════════════════
@@ -296,7 +296,7 @@ AUDIT_RULES = [
         "threshold": 1,
         "operator": "lt",
         "detail_ok": "Accès anonyme correctement restreint",
-        "remediation": "Configurer RestrictAnonymous ≥ 1.\nChemin GPO : Options de sécurité → 'Accès réseau : ne pas permettre l'énumération anonyme des comptes SAM'.",
+        "remediation": "Valeur recommandée : 1 (restreint) ou 2 (restreint strict)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Options de sécurité\n                      └─ Accès réseau : ne pas autoriser l'énumération anonyme des comptes SAM → Activé\n                      └─ Accès réseau : ne pas autoriser l'énumération anonyme des partages et comptes SAM → Activé",
     },
     {
         "id": "PRIV-002",
@@ -311,7 +311,7 @@ AUDIT_RULES = [
         "threshold": 0,
         "operator": "ne",
         "detail_ok": "Compte Invité désactivé",
-        "remediation": "Désactiver le compte Invité via GPO : EnableGuestAccount = 0.\nChemin GPO : Options de sécurité → 'Comptes : statut du compte Invité'.",
+        "remediation": "Valeur recommandée : Désactivé\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Options de sécurité\n                      └─ Comptes : statut du compte Invité → Désactivé",
     },
 
     # ══ REGISTRE (Registry.pol) ════════════════════════════════════════════════
@@ -329,7 +329,7 @@ AUDIT_RULES = [
         "reg_value": "UseLogonCredential",
         "reg_expected": 0,
         "detail_ok": "WDigest désactivé — mots de passe non stockés en clair",
-        "remediation": "Configurer UseLogonCredential = 0 via GPO Préférences (Registre) ou Modèles d'administration.\nSur les systèmes antérieurs à Win10 (KB2871997 non installé), ce paramètre n'existe pas — appliquer le patch KB2871997.",
+        "remediation": "Valeur recommandée : UseLogonCredential = 0\n\n📍 Chemin GPO — 2 méthodes possibles :\n\nMéthode 1 — Préférences de registre (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Préférences\n      └─ Paramètres Windows\n          └─ Registre → Nouveau → Élément de registre\n              Ruche  : HKEY_LOCAL_MACHINE\n              Chemin : SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest\n              Valeur : UseLogonCredential\n              Type   : REG_DWORD\n              Données: 0\n\nMéthode 2 — Modèles d'administration (si le template est disponible) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Modèles d'administration\n          └─ MS Security Guide\n              └─ WDigest Authentication → Désactivé",
     },
     {
         "id": "SYS-002",
@@ -345,7 +345,7 @@ AUDIT_RULES = [
         "reg_value": "SMB1",
         "reg_expected": 0,
         "detail_ok": "SMBv1 explicitement désactivé par GPO",
-        "remediation": "Désactiver SMBv1 via GPO Registre : HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters → SMB1 = 0.\nAlternativement : PowerShell 'Set-SmbServerConfiguration -EnableSMB1Protocol $false'\nVérifier d'abord les équipements legacy (anciens NAS, photocopieurs) qui peuvent en dépendre.",
+        "remediation": "Valeur recommandée : SMB1 = 0\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Préférences\n      └─ Paramètres Windows\n          └─ Registre → Nouveau → Élément de registre\n              Ruche  : HKEY_LOCAL_MACHINE\n              Chemin : SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters\n              Valeur : SMB1\n              Type   : REG_DWORD\n              Données: 0\n\nAlternative PowerShell (DC) :\n  Set-SmbServerConfiguration -EnableSMB1Protocol $false\n\n⚠ Vérifier d'abord les équipements legacy (NAS, photocopieurs, scanners réseau) qui\npeuvent dépendre de SMBv1. Utiliser l'audit SMB avant désactivation :\n  Get-SmbSession | Where-Object {$_.Dialect -eq '1.0'}",
     },
     {
         "id": "SYS-003",
@@ -361,7 +361,7 @@ AUDIT_RULES = [
         "reg_value": "EnableFirewall",
         "reg_expected": 1,
         "detail_ok": "Pare-feu Windows activé par GPO",
-        "remediation": "Ne jamais désactiver le pare-feu via GPO. Configurer les exceptions nécessaires via GPO Pare-feu Windows avec sécurité avancée.\nChemin GPO : Configuration ordinateur → Paramètres Windows → Paramètres de sécurité → Pare-feu Windows avec sécurité avancée.",
+        "remediation": "Valeur recommandée : EnableFirewall = 1 (Activé) — ne jamais désactiver\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Pare-feu Windows avec sécurité avancée\n                  └─ Pare-feu Windows avec sécurité avancée\n                      └─ Profil de domaine → État du pare-feu : Activé\n\nPour ajouter des exceptions (ne pas désactiver le pare-feu) :\nConfiguration ordinateur\n  └─ Paramètres de sécurité\n      └─ Pare-feu Windows avec sécurité avancée\n          └─ Règles de trafic entrant → Nouvelle règle",
     },
     {
         "id": "SYS-004",
@@ -377,7 +377,7 @@ AUDIT_RULES = [
         "reg_value": "NoDriveTypeAutoRun",
         "reg_expected": 255,
         "detail_ok": "AutoRun désactivé sur tous les lecteurs",
-        "remediation": "Configurer NoDriveTypeAutoRun = 255 (0xFF) pour désactiver AutoRun sur tous les types de lecteurs.\nChemin GPO : Modèles d'administration → Composants Windows → Stratégies de lecture automatique → 'Désactiver la lecture automatique'.",
+        "remediation": "Valeur recommandée : 255 (désactiver sur tous les types de lecteurs)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Modèles d'administration\n          └─ Composants Windows\n              └─ Stratégies de lecture automatique\n                  └─ Désactiver la lecture automatique → Activé → Tous les lecteurs\n\nOu via registre (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Préférences → Registre\n      Ruche  : HKEY_LOCAL_MACHINE\n      Chemin : SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\n      Valeur : NoDriveTypeAutoRun\n      Type   : REG_DWORD\n      Données: 255 (0xFF)",
     },
     {
         "id": "SYS-005",
@@ -393,7 +393,7 @@ AUDIT_RULES = [
         "reg_value": "EnableVirtualizationBasedSecurity",
         "reg_expected": 1,
         "detail_ok": "Credential Guard / VBS activé",
-        "remediation": "Activer Device Guard / Credential Guard via GPO.\nChemin GPO : Modèles d'administration → Système → Device Guard → 'Activer la sécurité basée sur la virtualisation'.\nPré-requis : UEFI, Secure Boot, TPM 2.0, CPU 64 bits avec virtualisation, Windows 10/11 ou Server 2016+.",
+        "remediation": "Valeur recommandée : EnableVirtualizationBasedSecurity = 1\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Modèles d'administration\n          └─ Système\n              └─ Device Guard\n                  └─ Activer la sécurité basée sur la virtualisation → Activé\n                      └─ Sélectionner le niveau de sécurité de la plateforme : Démarrage sécurisé et protection DMA\n\nPrérequis matériels obligatoires :\n  • CPU 64 bits avec virtualisation (Intel VT-x / AMD-V)\n  • UEFI (pas de BIOS legacy)\n  • Secure Boot activé\n  • TPM 2.0\n  • Windows 10/11 ou Server 2016+",
     },
 
     # ══ AUDIT ══════════════════════════════════════════════════════════════════
@@ -410,7 +410,7 @@ AUDIT_RULES = [
         "threshold": 0,
         "operator": "eq",
         "detail_ok": "Audit des connexions activé (Succès + Échec)",
-        "remediation": "Configurer AuditLogonEvents = 3 (Succès + Échec).\nChemin GPO : Paramètres de sécurité → Stratégies locales → Stratégie d'audit.\nGénère les événements 4624 (connexion réussie) et 4625 (échec) — essentiels pour détecter les attaques par force brute.",
+        "remediation": "Valeur recommandée : 3 (Succès + Échec)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Stratégie d'audit\n                      └─ Auditer les événements de connexion → Succès et Échec\n\nÉvénements générés :\n  4624 — Connexion réussie\n  4625 — Échec de connexion (brute force)\n  4634/4647 — Déconnexion\n  4648 — Connexion avec credentials explicites (pass-the-hash)\n\nPour l'audit avancé (recommandé) :\nConfiguration ordinateur\n  └─ Paramètres Windows → Paramètres de sécurité\n      └─ Configuration avancée de la stratégie d'audit\n          └─ Ouverture/fermeture de session → Auditer l'ouverture de session",
     },
     {
         "id": "AUDIT-002",
@@ -425,7 +425,7 @@ AUDIT_RULES = [
         "threshold": 0,
         "operator": "eq",
         "detail_ok": "Audit de gestion des comptes activé",
-        "remediation": "Configurer AuditAccountManage = 3 (Succès + Échec).\nGénère les événements 4720 (création compte), 4732 (ajout groupe), 4740 (verrouillage) — indispensables pour détecter les créations de backdoors.",
+        "remediation": "Valeur recommandée : 3 (Succès + Échec)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Stratégie d'audit\n                      └─ Auditer la gestion des comptes → Succès et Échec\n\nÉvénements générés :\n  4720 — Création d'un compte utilisateur (backdoor potentielle)\n  4732 — Ajout à un groupe (élévation de privilèges)\n  4740 — Verrouillage de compte (attaque brute force)\n  4728 — Ajout au groupe Administrateurs du domaine",
     },
     {
         "id": "AUDIT-003",
@@ -440,7 +440,7 @@ AUDIT_RULES = [
         "threshold": 0,
         "operator": "eq",
         "detail_ok": "Audit des modifications de stratégie activé",
-        "remediation": "Configurer AuditPolicyChange = 3 (Succès + Échec).\nDétecte toute modification des droits utilisateurs (4704), des stratégies d'audit (4719) et des relations d'approbation (4706).",
+        "remediation": "Valeur recommandée : 3 (Succès + Échec)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Stratégie d'audit\n                      └─ Auditer les modifications de stratégie → Succès et Échec\n\nÉvénements générés :\n  4719 — Modification de la stratégie d'audit (tentative de désactivation)\n  4704 — Attribution de droits utilisateur\n  4706 — Nouvelle approbation de domaine créée",
     },
     {
         "id": "AUDIT-004",
@@ -455,7 +455,7 @@ AUDIT_RULES = [
         "threshold": 0,
         "operator": "eq",
         "detail_ok": "Audit des accès aux objets activé",
-        "remediation": "Configurer AuditObjectAccess = 3 pour auditer l'accès aux fichiers, registre et objets AD sensibles.\nNécessite d'activer l'audit sur les objets individuellement (SACL).",
+        "remediation": "Valeur recommandée : 3 (Succès + Échec)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Stratégie d'audit\n                      └─ Auditer l'accès aux objets → Succès et Échec\n\n⚠ Activer l'audit sur les objets individuellement via leurs SACL (liste de contrôle d'accès\nsystème) — sinon aucun événement n'est généré même avec la stratégie activée.\nÉvénements : 4663 (accès fichier), 4657 (modification registre)",
     },
     {
         "id": "AUDIT-005",
@@ -470,7 +470,7 @@ AUDIT_RULES = [
         "threshold": 1,
         "operator": "ne",
         "detail_ok": "Audit avancé prioritaire sur l'audit legacy",
-        "remediation": "Configurer SCENoApplyLegacyAuditPolicy = 1 pour éviter les conflits entre audit legacy et audit avancé (audit.csv).",
+        "remediation": "Valeur recommandée : SCENoApplyLegacyAuditPolicy = 1\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Préférences\n      └─ Paramètres Windows\n          └─ Registre\n              Ruche  : HKEY_LOCAL_MACHINE\n              Chemin : SYSTEM\\CurrentControlSet\\Control\\Lsa\n              Valeur : SCENoApplyLegacyAuditPolicy\n              Type   : REG_DWORD\n              Données: 1\n\nPermet l'utilisation des stratégies d'audit avancées (audit.csv) sans conflit avec les\nparamètres d'audit legacy de la stratégie de sécurité.",
     },
     {
         "id": "AUDIT-006",
@@ -485,7 +485,7 @@ AUDIT_RULES = [
         "threshold": 0,
         "operator": "eq",
         "detail_ok": "Audit d'utilisation des privilèges activé",
-        "remediation": "Configurer AuditPrivilegeUse = 1 (succès).\nDétecte l'utilisation de SeDebugPrivilege, SeTakeOwnershipPrivilege — droits souvent exploités lors d'attaques.",
+        "remediation": "Valeur recommandée : 1 (Succès minimum)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Stratégie d'audit\n                      └─ Auditer l'utilisation des privilèges → Succès\n\nDétecte l'utilisation de :\n  SeDebugPrivilege — accès mémoire processus (Mimikatz)\n  SeTakeOwnershipPrivilege — prise de propriété d'objets\n  SeBackupPrivilege — lecture de fichiers sensibles",
     },
     {
         "id": "AUDIT-007",
@@ -500,7 +500,7 @@ AUDIT_RULES = [
         "threshold": 0,
         "operator": "eq",
         "detail_ok": "Audit des événements système activé",
-        "remediation": "Configurer AuditSystemEvents = 1 (succès).\nTrace les démarrages/arrêts, modifications de l'heure système (4616), et pertes d'événements d'audit (1102).",
+        "remediation": "Valeur recommandée : 1 (Succès minimum)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Stratégie d'audit\n                      └─ Auditer les événements système → Succès\n\nÉvénements générés :\n  4616 — Modification de l'heure système (tentative d'anti-forensics)\n  1102 — Journal d'audit effacé (attaque en cours)\n  4608/4609 — Démarrage/arrêt de Windows",
     },
     {
         "id": "LOG-001",
@@ -515,7 +515,7 @@ AUDIT_RULES = [
         "threshold": 1048576,
         "operator": "lt",
         "detail_ok": "Taille du journal Sécurité suffisante",
-        "remediation": "Configurer MaximumLogSize ≥ 1 048 576 Ko (1 Go) minimum pour le journal Sécurité.\nChemin GPO : Paramètres de sécurité → Journal des événements → 'Taille maximale du journal de sécurité'.\nAvec un journal trop petit, les événements anciens sont écrasés — impossible de remonter un incident de plusieurs jours.",
+        "remediation": "Valeur recommandée : ≥ 1 048 576 Ko (1 Go) — MS Baseline recommande 4 Go\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Journal des événements\n                  └─ Taille maximale du journal de sécurité → 1 048 576 (Ko)\n\nConfigurer aussi la politique de rétention :\n  └─ Méthode de conservation du journal de sécurité\n      → Remplacer les événements selon les besoins (recommandé)\n\n⚠ Avec le défaut Windows (20 Mo), un AD actif écrase les événements en quelques heures —\nimpossible de retrouver les traces d'une attaque survenue 24h plus tôt.",
     },
 
     # ══ KERBEROS ═══════════════════════════════════════════════════════════════
@@ -532,7 +532,7 @@ AUDIT_RULES = [
         "threshold": 10,
         "operator": "gt",
         "detail_ok": "Durée de vie des tickets Kerberos correcte",
-        "remediation": "Configurer MaxTicketAge ≤ 10h dans la Default Domain Policy.\nUn ticket long-lived donne plus de temps à un attaquant pour l'exploiter après vol (Pass-the-Ticket, Golden Ticket).",
+        "remediation": "Valeur recommandée : ≤ 10 heures\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies de compte\n                  └─ Stratégie Kerberos\n                      └─ Durée de vie maximale du ticket de service → 10 heures",
     },
     {
         "id": "KRB-002",
@@ -547,7 +547,7 @@ AUDIT_RULES = [
         "threshold": 5,
         "operator": "gt",
         "detail_ok": "Tolérance d'horloge Kerberos correcte",
-        "remediation": "Configurer MaxClockSkew ≤ 5 minutes.\nUne tolérance excessive facilite les attaques par replay de tickets. S'assurer que NTP est correctement configuré sur tous les postes.",
+        "remediation": "Valeur recommandée : ≤ 5 minutes\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies de compte\n                  └─ Stratégie Kerberos\n                      └─ Tolérance maximale pour la synchronisation des horloges → 5 minutes\n\n⚠ S'assurer que NTP est correctement configuré sur tous les postes du domaine,\nsinon les authentifications Kerberos échoueront.",
     },
     {
         "id": "KRB-003",
@@ -562,7 +562,7 @@ AUDIT_RULES = [
         "threshold": 7,
         "operator": "gt",
         "detail_ok": "Durée de renouvellement des tickets Kerberos correcte",
-        "remediation": "Configurer MaxRenewAge ≤ 7 jours pour limiter la durée pendant laquelle un ticket volé peut être renouvelé.",
+        "remediation": "Valeur recommandée : ≤ 7 jours\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies de compte\n                  └─ Stratégie Kerberos\n                      └─ Durée de vie maximale pour le renouvellement d'un ticket utilisateur → 7 jours",
     },
 ]
 
@@ -578,7 +578,7 @@ AUDIT_RULES_REGVAL = [
         "category": "UAC & Élévation de privilèges",
         "regval_key": "machine\\software\\microsoft\\windows\\currentversion\\policies\\system\\enablelua",
         "bad_val": "4,0",
-        "remediation": "EnableLUA = 1. L'UAC est une défense fondamentale contre l'escalade de privilèges. Un malware peut s'élever silencieusement si UAC est désactivé.",
+        "remediation": "Valeur recommandée : EnableLUA = 1 (Activé)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Options de sécurité\n                      └─ Contrôle de compte d'utilisateur : exécuter tous les administrateurs\n                         en mode d'approbation Administrateur → Activé\n\n⚠ UAC désactivé = tout programme malveillant s'exécute avec les droits SYSTEM sans demande\nde confirmation. C'est l'une des protections les plus fondamentales de Windows.",
     },
     {
         "id": "UAC-002",
@@ -588,7 +588,7 @@ AUDIT_RULES_REGVAL = [
         "category": "UAC & Élévation de privilèges",
         "regval_key": "machine\\software\\microsoft\\windows\\currentversion\\policies\\system\\consentpromptbehavioradmin",
         "bad_val": "4,0",
-        "remediation": "ConsentPromptBehaviorAdmin = 2 (demande credentials) ou 5 (demande confirmation). Valeur 0 = élévation silencieuse = tout malware devient SYSTEM sans interaction.",
+        "remediation": "Valeur recommandée : 2 (Demander les informations d'identification) ou 5 (Demander confirmation)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Options de sécurité\n                      └─ Contrôle de compte d'utilisateur : comportement de l'invite d'élévation\n                         pour les administrateurs en mode d'approbation Administrateur\n\nValeurs :\n  0 = Élever sans demander (le pire — CRITIQUE)\n  1 = Demander les credentials sur le bureau sécurisé\n  2 = Demander les credentials (recommandé CIS/ANSSI)\n  5 = Demander confirmation (MS Baseline)",
     },
     {
         "id": "SMB-001",
@@ -598,7 +598,7 @@ AUDIT_RULES_REGVAL = [
         "category": "Authentification réseau",
         "regval_key": "machine\\system\\currentcontrolset\\services\\lanmanworkstation\\parameters\\requiresecuritysignature",
         "bad_val": "4,0",
-        "remediation": "RequireSecuritySignature = 1. Protège contre SMB relay / MITM. Vérifier la compatibilité NAS et imprimantes réseau avant déploiement.",
+        "remediation": "Valeur recommandée : RequireSecuritySignature = 1 (côté client ET serveur)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Options de sécurité\n                      └─ Serveur réseau Microsoft : communications signées numériquement (toujours)\n                         → Activé\n                      └─ Client réseau Microsoft : communications signées numériquement (toujours)\n                         → Activé\n\n⚠ Tester avant déploiement — les équipements réseau anciens (NAS, imprimantes)\npeuvent ne pas supporter la signature SMB obligatoire.",
     },
     {
         "id": "LDAP-001",
@@ -608,7 +608,7 @@ AUDIT_RULES_REGVAL = [
         "category": "Authentification réseau",
         "regval_key": "machine\\system\\currentcontrolset\\services\\ldap\\ldapclientintegrity",
         "bad_val": "4,0",
-        "remediation": "LDAPClientIntegrity = 2 (signature requise). Valeur 0 = les requêtes LDAP ne sont pas signées — permet des attaques LDAP relay pour escalader les privilèges dans l'AD (CVE critique).",
+        "remediation": "Valeur recommandée : LDAPClientIntegrity = 2 (Signature requise)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Options de sécurité\n                      └─ Contrôleur de domaine : conditions requises pour la signature du serveur LDAP\n                         → Exiger la signature\n\nNiveaux :\n  0 = Aucune signature (CRITIQUE — LDAP relay possible)\n  1 = Négocier la signature (insuffisant)\n  2 = Exiger la signature (recommandé CIS/MS/ANSSI)",
     },
     {
         "id": "PRINT-001",
@@ -618,7 +618,7 @@ AUDIT_RULES_REGVAL = [
         "category": "Services & Composants système",
         "regval_key": "machine\\system\\currentcontrolset\\control\\print\\providers\\lanman print services\\servers\\addprinterdrivers",
         "bad_val": "4,0",
-        "remediation": "AddPrinterDrivers = 1 (seuls les admins). Valeur 0 = tout utilisateur peut installer des drivers imprimantes — vecteur PrintNightmare pour obtenir SYSTEM. Déployer aussi le patch KB5005010.",
+        "remediation": "Valeur recommandée : AddPrinterDrivers = 1 (Administrateurs uniquement)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Options de sécurité\n                      └─ Périphériques : empêcher les utilisateurs d'installer des pilotes d'imprimantes\n                         → Activé\n\nEt appliquer le patch MS KB5005010 (CVE-2021-34527 — PrintNightmare).\n\nPour Point and Print :\nConfiguration ordinateur\n  └─ Modèles d'administration → Imprimantes\n      └─ Restrictions de Point and Print → Activé\n          └─ Lors de l'installation de pilotes pour une nouvelle connexion : Afficher un avertissement et une élévation",
     },
 
     # ── UAC complémentaires ──
@@ -630,7 +630,7 @@ AUDIT_RULES_REGVAL = [
         "category": "UAC & Élévation de privilèges",
         "regval_key": "machine\\software\\microsoft\\windows\\currentversion\\policies\\system\\filteradministratortoken",
         "bad_val": "4,0",
-        "remediation": "FilterAdministratorToken = 1. Applique le mode approbation administrateur même au compte Administrateur intégré (RID 500). Réduit la surface d'attaque pass-the-hash.",
+        "remediation": "Valeur recommandée : FilterAdministratorToken = 1 (Activé)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Préférences\n      └─ Paramètres Windows\n          └─ Registre → Nouveau → Élément de registre\n              Ruche  : HKEY_LOCAL_MACHINE\n              Chemin : SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\n              Valeur : FilterAdministratorToken\n              Type   : REG_DWORD\n              Données: 1\n\nApplique le mode approbation administrateur même au compte RID 500 (Administrateur intégré).",
     },
     {
         "id": "UAC-004",
@@ -640,7 +640,7 @@ AUDIT_RULES_REGVAL = [
         "category": "UAC & Élévation de privilèges",
         "regval_key": "machine\\software\\microsoft\\windows\\currentversion\\policies\\system\\localaccounttokenfilterpolicy",
         "bad_val": "4,1",
-        "remediation": "LocalAccountTokenFilterPolicy = 0. Valeur 1 = les comptes locaux admins obtiennent un jeton complet via le réseau — permet le Pass-the-Hash latéral sur tous les postes avec le même mot de passe admin local. Combiner avec LAPS.",
+        "remediation": "Valeur recommandée : LocalAccountTokenFilterPolicy = 0\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Préférences\n      └─ Paramètres Windows\n          └─ Registre → Nouveau → Élément de registre\n              Ruche  : HKEY_LOCAL_MACHINE\n              Chemin : SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\n              Valeur : LocalAccountTokenFilterPolicy\n              Type   : REG_DWORD\n              Données: 0\n\nValeur 1 = les comptes locaux admins obtiennent un token élevé via réseau → Pass-the-Hash\nsur tous les postes avec le même mot de passe admin local.\nCombiner avec LAPS pour des mots de passe uniques par machine.",
     },
 
     # ── Authentification réseau complémentaires ──
@@ -652,7 +652,7 @@ AUDIT_RULES_REGVAL = [
         "category": "Authentification réseau",
         "regval_key": "machine\\system\\currentcontrolset\\control\\lsa\\msv1_0\\restrictsendingntlmtraffic",
         "bad_val": "4,0",
-        "remediation": "RestrictSendingNTLMTraffic = 1 (audit) puis = 2 (blocage). Valeur 0 = NTLM envoyé librement à n'importe quel serveur — vecteur d'attaque NTLM relay depuis un poste compromis.",
+        "remediation": "Valeur recommandée : RestrictSendingNTLMTraffic = 2 (Refuser tout)\nEn phase de déploiement : commencer par 1 (Audit) puis passer à 2\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Modèles d'administration\n          └─ Réseau\n              └─ Sécurité Lanman\n                  └─ Restreindre NTLM : trafic NTLM sortant vers des serveurs distants\n                      → Refuser tout (valeur 2)\n                      → Ou : Auditer tout (valeur 1) pour commencer\n\n⚠ Activer d'abord l'audit pour identifier les applications qui utilisent encore NTLM\navant de bloquer. Consulter le journal d'événements (EventID 8001-8004).",
     },
     {
         "id": "LDAP-002",
@@ -662,7 +662,7 @@ AUDIT_RULES_REGVAL = [
         "category": "Authentification réseau",
         "regval_key": "machine\\system\\currentcontrolset\\services\\ldap\\ldapclientintegrity",
         "bad_val": "4,1",
-        "remediation": "LDAPClientIntegrity = 2 (signature requise, pas juste négociée). Valeur 1 = signature seulement si le serveur la propose — pas suffisant contre une attaque downgrade.",
+        "remediation": "Valeur recommandée : LDAPClientIntegrity = 2\n\n📍 Même chemin que LDAP-001 — passer directement à la valeur 2 (Exiger la signature)\nplutôt que de rester à 1 (Négocier).",
     },
 
     # ── LSASS protection ──
@@ -674,7 +674,7 @@ AUDIT_RULES_REGVAL = [
         "category": "Services & Composants système",
         "regval_key": "machine\\system\\currentcontrolset\\control\\lsa\\runasppl",
         "bad_val": "4,0",
-        "remediation": "RunAsPPL = 1. Protège lsass.exe comme processus protégé — Mimikatz ne peut plus lire les credentials en mémoire même avec les droits admin locaux. Requis : Secure Boot activé.",
+        "remediation": "Valeur recommandée : RunAsPPL = 1 (Processus protégé)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Modèles d'administration\n          └─ Système\n              └─ Local Security Authority\n                  └─ Configurer la protection LSASS → Activé\n                     → Processus protégé avec vérification UEFI : Activé\n\nOu via registre :\nConfiguration ordinateur\n  └─ Préférences → Registre\n      Ruche  : HKEY_LOCAL_MACHINE\n      Chemin : SYSTEM\\CurrentControlSet\\Control\\Lsa\n      Valeur : RunAsPPL\n      Type   : REG_DWORD\n      Données: 1\n\nPrérequis : Secure Boot activé. Protège lsass.exe contre Mimikatz même avec droits admin.",
     },
 
     # ── Mots de passe complémentaires ──
@@ -686,7 +686,7 @@ AUDIT_RULES_REGVAL = [
         "category": "Mots de passe",
         "regval_key": "machine\\software\\microsoft\\windows nt\\currentversion\\winlogon\\passwordexpirywarning",
         "bad_val": "4,0",
-        "remediation": "PasswordExpiryWarning ≥ 14 jours. Avertit les utilisateurs suffisamment tôt pour éviter les verrouillages à l'expiration.",
+        "remediation": "Valeur recommandée : PasswordExpiryWarning ≥ 14 jours\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Préférences\n      └─ Paramètres Windows\n          └─ Registre → Nouveau → Élément de registre\n              Ruche  : HKEY_LOCAL_MACHINE\n              Chemin : SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\n              Valeur : PasswordExpiryWarning\n              Type   : REG_DWORD\n              Données: 14 (jours)",
     },
 
     # ── Audit complémentaires ──
@@ -710,7 +710,7 @@ AUDIT_RULES_REGVAL = [
         "category": "Droits & Accès réseau",
         "regval_key": "machine\\system\\currentcontrolset\\control\\lsa\\everyoneincludesanonymous",
         "bad_val": "4,1",
-        "remediation": "EveryoneIncludesAnonymous = 0. Valeur 1 = le groupe Everyone (Tout le monde) inclut les connexions anonymes — étend les permissions aux utilisateurs non authentifiés.",
+        "remediation": "Valeur recommandée : EveryoneIncludesAnonymous = 0\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Options de sécurité\n                      └─ Accès réseau : les autorisations de tout le monde s'appliquent\n                         aux utilisateurs anonymes → Désactivé",
     },
     {
         "id": "ANON-002",
@@ -720,7 +720,7 @@ AUDIT_RULES_REGVAL = [
         "category": "Droits & Accès réseau",
         "regval_key": "machine\\system\\currentcontrolset\\services\\lanmanserver\\parameters\\restrictnullsessaccess",
         "bad_val": "4,0",
-        "remediation": "RestrictNullSessAccess = 1. Empêche l'accès anonyme aux partages réseau. Valeur 0 = les partages listés dans NullSessionShares sont accessibles sans authentification.",
+        "remediation": "Valeur recommandée : RestrictNullSessAccess = 1 (Restreint)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Options de sécurité\n                      └─ Accès réseau : restreindre l'accès anonyme aux canaux nommés et aux partages\n                         → Activé",
     },
 
     # ── RDP / NLA ──
@@ -732,7 +732,7 @@ AUDIT_RULES_REGVAL = [
         "category": "Accès distant",
         "regval_key": "machine\\software\\policies\\microsoft\\windows nt\\terminal services\\userauthenication",
         "bad_val": "4,0",
-        "remediation": "UserAuthentication = 1. NLA exige l'authentification AD avant d'établir la session RDP — empêche l'exploitation de vulnérabilités RDP pré-auth (BlueKeep CVE-2019-0708).",
+        "remediation": "Valeur recommandée : UserAuthentication = 1 (NLA requis)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Modèles d'administration\n          └─ Composants Windows\n              └─ Services Bureau à distance\n                  └─ Hôte de session Bureau à distance\n                      └─ Sécurité\n                          └─ Exiger l'authentification de l'utilisateur pour les connexions\n                             distantes en utilisant NLA → Activé\n\nNLA exige l'authentification AD avant d'établir la session RDP — empêche l'exploitation\nde vulnérabilités RDP pré-authentification (BlueKeep CVE-2019-0708, DejaBlue).",
     },
 
     # ── PowerShell ──
@@ -744,7 +744,7 @@ AUDIT_RULES_REGVAL = [
         "category": "Audit",
         "regval_key": "machine\\software\\policies\\microsoft\\windows\\powershell\\scriptblocklogging\\enablescriptblocklogging",
         "bad_val": "4,0",
-        "remediation": "EnableScriptBlockLogging = 1. Enregistre tout le contenu des scripts PowerShell exécutés dans l'EventLog (Event ID 4104). Essentiel pour détecter les attaques PowerShell (Empire, Cobalt Strike...).",
+        "remediation": "Valeur recommandée : EnableScriptBlockLogging = 1 (Activé)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Modèles d'administration\n          └─ Composants Windows\n              └─ Windows PowerShell\n                  └─ Activer la journalisation de bloc de script PowerShell → Activé\n\nActiver aussi la transcription :\n  └─ Activer la transcription PowerShell → Activé\n      └─ Répertoire de sortie de la transcription : \\\\serveur\\logs\\powershell\\\n\nÉvénements générés dans le journal Microsoft-Windows-PowerShell/Operational :\n  4104 — Contenu du script exécuté (détecte Empire, Cobalt Strike, etc.)",
     },
 
     # ── Kerberos ──
@@ -756,7 +756,7 @@ AUDIT_RULES_REGVAL = [
         "category": "Authentification réseau",
         "regval_key": "machine\\software\\microsoft\\windows\\currentversion\\policies\\system\\kerberos\\parameters\\supportedencryptiontypes",
         "bad_val": "4,3",
-        "remediation": "SupportedEncryptionTypes = 2147483644 (AES128+AES256 uniquement, sans DES/RC4). DES est cassé depuis 2000. RC4 vulnérable aux attaques Kerberoasting.",
+        "remediation": "Valeur recommandée : SupportedEncryptionTypes = 2147483644 (AES128 + AES256 uniquement)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Options de sécurité\n                      └─ Sécurité réseau : configurer les types de chiffrement autorisés pour Kerberos\n                          → Cocher uniquement : AES128_HMAC_SHA1 et AES256_HMAC_SHA1\n\n⚠ Désactiver DES et RC4. Vérifier la compatibilité des comptes de service avant\n(certains services anciens nécessitent RC4 — les identifier via l'attribut msDS-SupportedEncryptionTypes).",
     },
 ]
 
@@ -873,7 +873,7 @@ AUDIT_RULES_PRIVRIGHTS = [
         "category": "Droits & Privilèges",
         "right_key": "sedebugprivilege",
         "allowed_groups": {"*s-1-5-32-544"},
-        "remediation": "SeDebugPrivilege = Administrators seulement. Permet de lire la mémoire de tout processus — Mimikatz l'utilise pour extraire les credentials de lsass.",
+        "remediation": "Valeur recommandée : SeDebugPrivilege = *S-1-5-32-544 (Administrateurs uniquement)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Attribution des droits utilisateur\n                      └─ Déboguer les programmes → Administrateurs uniquement\n\n⚠ Retirer tout autre compte ou groupe. Ce droit permet de lire la mémoire de n'importe\nquel processus — Mimikatz l'utilise pour extraire les credentials de lsass.exe.",
     },
     {
         "id": "PRIV-R002",
@@ -883,7 +883,7 @@ AUDIT_RULES_PRIVRIGHTS = [
         "category": "Droits & Privilèges",
         "right_key": "setcbprivilege",
         "empty_only": True,
-        "remediation": "SeTcbPrivilege doit être vide. Ce droit permet à un processus d'agir comme le système d'exploitation — escalade totale garantie.",
+        "remediation": "Valeur recommandée : SeTcbPrivilege = (vide — aucun compte)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Attribution des droits utilisateur\n                      └─ Agir comme faisant partie du système d'exploitation → (vide)\n\nCe droit permet à un processus de s'authentifier comme n'importe quel utilisateur.\nAucun compte ne devrait l'avoir dans un environnement sécurisé.",
     },
     {
         "id": "PRIV-R003",
@@ -893,7 +893,7 @@ AUDIT_RULES_PRIVRIGHTS = [
         "category": "Droits & Privilèges",
         "right_key": "setakeownershipprivilege",
         "allowed_groups": {"*s-1-5-32-544"},
-        "remediation": "SeTakeOwnership = Administrators seulement. Contourne les ACL sur n'importe quel objet.",
+        "remediation": "Valeur recommandée : SeTakeOwnershipPrivilege = *S-1-5-32-544 (Administrateurs)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Attribution des droits utilisateur\n                      └─ Prendre possession de fichiers ou d'autres objets → Administrateurs uniquement",
     },
     {
         "id": "PRIV-R004",
@@ -903,7 +903,7 @@ AUDIT_RULES_PRIVRIGHTS = [
         "category": "Droits & Privilèges",
         "right_key": "sebackupprivilege",
         "allowed_groups": {"*s-1-5-32-544", "*s-1-5-32-551"},
-        "remediation": "SeBackupPrivilege = Administrators + Backup Operators. Permet de lire tout fichier indépendamment des ACL.",
+        "remediation": "Valeur recommandée : SeBackupPrivilege = *S-1-5-32-544, *S-1-5-32-551\n(Administrateurs + Opérateurs de sauvegarde uniquement)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Attribution des droits utilisateur\n                      └─ Sauvegarder des fichiers et des répertoires\n                          → Administrateurs, Opérateurs de sauvegarde uniquement\n\nCe droit permet de lire tout fichier indépendamment des ACL — utilisé pour exfiltrer\nla ruche SAM et récupérer tous les hashes de mots de passe locaux.",
     },
     {
         "id": "PRIV-R005",
@@ -913,7 +913,7 @@ AUDIT_RULES_PRIVRIGHTS = [
         "category": "Droits & Privilèges",
         "right_key": "seloaddriverprivilege",
         "allowed_groups": {"*s-1-5-32-544"},
-        "remediation": "SeLoadDriverPrivilege = Administrators seulement. Charger un driver malveillant = contrôle total du noyau, contournement de tout EDR.",
+        "remediation": "Valeur recommandée : SeLoadDriverPrivilege = *S-1-5-32-544 (Administrateurs uniquement)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Attribution des droits utilisateur\n                      └─ Charger et décharger les pilotes de périphériques\n                          → Administrateurs uniquement\n\n⚠ Charger un driver malveillant donne un accès Ring 0 (noyau) = contournement total\nde tous les EDR/antivirus. Technique BYOVD (Bring Your Own Vulnerable Driver).",
     },
 ]
 
@@ -4783,12 +4783,12 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
   border-top:1px solid var(--border);
 }
 .fc-body.open{display:block}
-.fc-detail{font-size:12px;color:var(--txt2);padding:10px 0 6px;line-height:1.6}
+.fc-detail{font-size:12px;color:var(--txt2);padding:10px 0 6px;line-height:1.6;white-space:pre-wrap}
 .fc-ref{font-size:11px;color:var(--txt3);margin-bottom:6px}
 .fc-reco{
   font-size:12px;color:var(--green);
   padding:8px 12px;background:var(--green-bg);border-radius:4px;
-  line-height:1.5;
+  line-height:1.6;white-space:pre-wrap;font-family:'JetBrains Mono',monospace;font-size:11px;
 }
 .fc-sources{margin-top:8px;font-size:11px;color:var(--txt3);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .fc-gpo-link{
