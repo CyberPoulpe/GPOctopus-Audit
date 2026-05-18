@@ -4295,7 +4295,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 }
 
 *{box-sizing:border-box;margin:0;padding:0}
-html{font-size:14px}
+html{font-size:16px}
 body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh}
 
 /* ── Layout ────────────────────────────────────────── */
@@ -4559,7 +4559,7 @@ body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--t
 .search-bar input{
   width:100%;padding:14px 16px 14px 46px;
   background:var(--surface);border:1px solid var(--border2);border-radius:8px;
-  color:var(--txt);font-size:14px;font-family:'Inter',sans-serif;
+  color:var(--txt);font-size:16px;font-family:'Inter',sans-serif;
   outline:none;transition:border-color .15s,box-shadow .15s;
 }
 .search-bar input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(74,127,212,.12)}
