@@ -6343,7 +6343,6 @@ def main():
         description='GPOctopus Audit — Analyse GPO Active Directory',
         epilog="""
 Exemples :
-  python3 gpoctopus.py --demo -o rapport.html
   python3 gpoctopus.py --dc 192.168.1.10 --domain corp.local --user audit --password 'P@ss!' -o rapport.html
   sudo mount -t cifs //DC01/SYSVOL /mnt/sysvol -o user=admin,domain=CORP,vers=3.0
   python3 gpoctopus.py --dc DC01 --domain corp.local --user admin --password 'P@ss!' --sysvol /mnt/sysvol -o rapport.html
@@ -6355,7 +6354,6 @@ Exemples :
     parser.add_argument('--password', help='Mot de passe')
     parser.add_argument('--ssl',      action='store_true', help='LDAPS port 636')
     parser.add_argument('--sysvol',   help='Chemin local du SYSVOL monté')
-    parser.add_argument('--demo',     action='store_true', help='Mode démo sans AD')
     parser.add_argument('-o', '--output', default='rapport_gpo.html', help='Fichier de sortie')
     parser.add_argument('--json',     action='store_true', help='Export JSON')
     args = parser.parse_args()
@@ -6364,10 +6362,7 @@ Exemples :
     print("  GPOctopus Audit — CIS · ANSSI · MS Baseline")
     print("=" * 60)
 
-    if args.demo:
-        print("[*] Mode démo")
-        gpos = generate_demo_data()
-    elif args.dc and args.domain and args.user and args.password:
+    if args.dc and args.domain and args.user and args.password:
         c = GPOCollector(args.dc, args.domain, args.user, args.password,
                          args.ssl, args.sysvol)
         gpos = c.collect_all()
@@ -6564,19 +6559,6 @@ def show_result(report_path):
         print(f"  Conformes      : {C.GREEN}{data.get('compliant_count', 0)}{C.RESET}")
         print(f"  GPO orphelines : {data.get('orphan_count', 0)}")
 
-def open_report(report_path):
-    """Tente d'ouvrir le rapport dans un navigateur."""
-    abs_path = os.path.abspath(report_path)
-    for cmd in [["xdg-open"], ["firefox"], ["chromium"], ["google-chrome"]]:
-        try:
-            subprocess.Popen(cmd + [abs_path],
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
-            return True
-        except FileNotFoundError:
-            continue
-    return False
-
 # ─── Wizard principal ─────────────────────────────────────────────────────────
 
 def run_wizard():
@@ -6595,15 +6577,6 @@ def run_wizard():
         if not use_saved:
             saved = {}
 
-    # ── Mode démo ──
-    print()
-    demo = ask_yn("  Lancer en mode démo (sans connexion AD) ?", default="n")
-    if demo:
-        step("► Mode démo")
-        output = ask("  Nom du fichier de sortie", default="rapport_gpo.html")
-        _run_auditor([], output, demo=True)
-        return
-
     # ── Paramètres AD ──
     step("► Paramètres Active Directory")
     sep()
@@ -6612,39 +6585,7 @@ def run_wizard():
     domain  = ask("  Domaine", default=saved.get("domain", ""))
     user    = ask("  Utilisateur", default=saved.get("user", ""))
 
-    # Proposer de charger un mot de passe sauvegardé
-    cred_file = Path(__file__).parent / ".gpoctopus_creds"
-    password = ""
-    if cred_file.exists():
-        use_saved_pw = ask_yn("  Utiliser le mot de passe sauvegardé ?", default="o")
-        if use_saved_pw:
-            try:
-                import base64, hashlib, hmac as _hmac
-                with open(cred_file, 'rb') as cf:
-                    raw = cf.read()
-                # XOR simple avec dérivé du hostname
-                import socket
-                key = hashlib.sha256(socket.gethostname().encode()).digest()
-                dec = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
-                password = dec.decode('utf-8')
-                ok("Mot de passe chargé")
-            except Exception:
-                warn("Impossible de lire le mot de passe sauvegardé")
-                password = ""
-
-    if not password:
-        password = ask("  Mot de passe", secret=True)
-        if password and ask_yn("  Sauvegarder le mot de passe (chiffré localement) ?", default="n"):
-            try:
-                import base64, hashlib, socket
-                key = hashlib.sha256(socket.gethostname().encode()).digest()
-                enc = bytes(b ^ key[i % len(key)] for i, b in enumerate(password.encode('utf-8')))
-                with open(cred_file, 'wb') as cf:
-                    cf.write(enc)
-                cred_file.chmod(0o600)
-                ok("Mot de passe sauvegardé (chiffré par dérivation du hostname)")
-            except Exception as e:
-                warn(f"Impossible de sauvegarder : {e}")
+    password = ask("  Mot de passe", secret=True)
 
     if not all([dc, domain, user, password]):
         err("Tous les champs sont requis.")
@@ -6787,8 +6728,7 @@ def run_wizard():
     success = _run_auditor(
         ["--dc", dc, "--domain", domain, "--user", user, "--password", password]
         + extra_args,
-        output,
-        demo=False
+        output
     )
 
     # ── Démontage SYSVOL ──
@@ -6803,20 +6743,14 @@ def run_wizard():
         show_result(output)
         sep()
         ok(f"Rapport généré : {C.BOLD}{os.path.abspath(output)}{C.RESET}")
-        print()
-        if ask_yn("  Ouvrir le rapport dans le navigateur ?", default="o"):
-            if not open_report(output):
-                info(f"Ouvrez manuellement : xdg-open {os.path.abspath(output)}")
     print()
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
-def _run_auditor(extra_args, output, demo=False):
+def _run_auditor(extra_args, output):
     """Lance l'audit en appelant main() directement dans le même processus."""
     argv_backup = sys.argv[:]
     sys.argv = [sys.argv[0]]
-    if demo:
-        sys.argv += ["--demo"]
     sys.argv += extra_args + ["-o", output]
 
     import io, contextlib, traceback as _tb
