@@ -133,280 +133,436 @@ except ImportError:
 # check_key doit correspondre EXACTEMENT à ce que parse_gpttmpl() retourne
 # (tout en minuscules, sans underscores, tel qu'écrit dans le .inf)
 
+# ─── Règles d'audit ─────────────────────────────────────────────────────────
+# Structure étendue :
+#   "ref"           : références exactes CIS / ANSSI / MS Baseline
+#   "rec_value"     : valeur recommandée (affichée dans la remédiation)
+#   "absent_sev"    : sévérité si le paramètre est absent des GPO
+#                     None = ignorer si absent (valeur par défaut Windows acceptable)
+#                     "critical"/"warning"/"info" = remonter même si absent
+#   "default_ok"    : True si la valeur par défaut Windows est sûre (pas de finding si absent)
+
 AUDIT_RULES = [
-    # ── Mots de passe ──
+    # ══ MOTS DE PASSE ══════════════════════════════════════════════════════════
     {
         "id": "PWD-001",
         "title": "Longueur minimale du mot de passe insuffisante",
         "severity": "critical",
-        "ref": "CIS 1.1.1 · ANSSI R-03 · MS Baseline",
+        "absent_sev": "warning",    # Défaut Windows = 7 chars — insuffisant
+        "ref": "CIS 1.1.1 · ANSSI R-03 · MS Baseline v22H2",
+        "rec_value": "≥ 14 caractères (CIS), ≥ 12 (ANSSI), ≥ 14 (MS Baseline)",
         "category": "Mots de passe",
-        "check_key": "minimumpasswordlength",   # clé telle que dans GptTmpl.inf
+        "check_key": "minimumpasswordlength",
         "section": "password_policy",
         "threshold": 14,
         "operator": "lt",
-        "remediation": "Configurer MinimumPasswordLength ≥ 14 dans la Default Domain Policy.",
+        "detail_ok": "Longueur minimale correctement configurée (≥ 14 caractères)",
+        "remediation": "Configurer MinimumPasswordLength ≥ 14 dans la GPO de politique de mots de passe.\nChemin GPO : Configuration ordinateur → Paramètres Windows → Paramètres de sécurité → Stratégies de compte → Stratégie de mot de passe.",
     },
     {
         "id": "PWD-002",
         "title": "Historique des mots de passe trop court",
         "severity": "critical",
-        "ref": "CIS 1.1.2 · ANSSI R-03",
+        "absent_sev": "warning",    # Défaut Windows = 0 — aucun historique
+        "ref": "CIS 1.1.2 · ANSSI R-03 · MS Baseline v22H2",
+        "rec_value": "≥ 24 entrées (CIS/MS), ≥ 12 (ANSSI)",
         "category": "Mots de passe",
         "check_key": "passwordhistorysize",
         "section": "password_policy",
         "threshold": 24,
         "operator": "lt",
-        "remediation": "PasswordHistorySize ≥ 24 pour empêcher la réutilisation cyclique.",
+        "detail_ok": "Historique des mots de passe correct (≥ 24)",
+        "remediation": "Configurer PasswordHistorySize ≥ 24 pour empêcher la réutilisation cyclique.\nSans historique, un utilisateur peut alterner 2 mots de passe indéfiniment.",
     },
     {
         "id": "PWD-003",
         "title": "Complexité du mot de passe désactivée",
         "severity": "critical",
-        "ref": "CIS 1.1.5 · ANSSI R-03",
+        "absent_sev": "warning",    # Défaut Windows = désactivé sur les postes de travail
+        "ref": "CIS 1.1.5 · ANSSI R-03 · MS Baseline v22H2",
+        "rec_value": "Activé (= 1)",
         "category": "Mots de passe",
         "check_key": "passwordcomplexity",
         "section": "password_policy",
         "threshold": 1,
         "operator": "ne",
-        "remediation": "PasswordComplexity = 1 (activé).",
+        "detail_ok": "Complexité du mot de passe activée",
+        "remediation": "Activer PasswordComplexity = 1.\nExige : majuscule, minuscule, chiffre ou caractère spécial, pas de nom de compte.",
     },
     {
         "id": "PWD-004",
-        "title": "Durée maximale du mot de passe illimitée (= 0) ou excessive (> 365j)",
+        "title": "Durée maximale du mot de passe excessive ou illimitée",
         "severity": "warning",
+        "absent_sev": None,         # Défaut Windows = 42 jours — acceptable
         "ref": "CIS 1.1.3 · ANSSI R-03",
+        "rec_value": "Entre 60 et 365 jours (CIS recommande ≤ 365, ANSSI ≤ 90)",
         "category": "Mots de passe",
         "check_key": "maximumpasswordage",
         "section": "password_policy",
         "threshold": 365,
         "operator": "gt_or_zero",
-        "remediation": "MaximumPasswordAge entre 60 et 365 jours. 0 = illimité (non recommandé).",
-    },
-    # ── Authentification réseau ──
-    {
-        "id": "AUTH-001",
-        "title": "Stockage des hash LAN Manager activé",
-        "severity": "critical",
-        "ref": "CIS 2.3.11.2 · ANSSI R-05",
-        "category": "Authentification",
-        "check_key": "nolmhash",
-        "section": "system_access",
-        "threshold": 1,
-        "operator": "ne",
-        "remediation": "NoLMHash = 1 (Network security: Do not store LAN Manager hash = Enabled).",
-    },
-    {
-        "id": "AUTH-002",
-        "title": "NTLMv1 autorisé (LmCompatibilityLevel < 5)",
-        "severity": "critical",
-        "ref": "CIS 2.3.11.7 · ANSSI R-06",
-        "category": "Authentification",
-        "check_key": "lmcompatibilitylevel",
-        "section": "system_access",
-        "threshold": 5,
-        "operator": "lt",
-        "remediation": "LmCompatibilityLevel = 5 (NTLMv2 only, refuse LM & NTLM).",
-    },
-    {
-        "id": "AUTH-003",
-        "title": "Seuil de verrouillage désactivé ou trop élevé (> 10)",
-        "severity": "warning",
-        "ref": "CIS 1.2.1 · ANSSI R-04",
-        "category": "Authentification",
-        "check_key": "lockoutbadcount",
-        "section": "system_access",
-        "threshold": 10,
-        "operator": "gt_or_zero",
-        "remediation": "LockoutBadCount entre 5 et 10. 0 = pas de verrouillage (non recommandé).",
-    },
-    {
-        "id": "AUTH-004",
-        "title": "Durée de verrouillage de compte insuffisante (< 15 min)",
-        "severity": "warning",
-        "ref": "CIS 1.2.2 · ANSSI R-04",
-        "category": "Authentification",
-        "check_key": "lockoutduration",
-        "section": "system_access",
-        "threshold": 15,
-        "operator": "lt",
-        "remediation": "LockoutDuration ≥ 15 minutes.",
-    },
-    # ── Audit ──
-    {
-        "id": "AUDIT-001",
-        "title": "Audit des connexions non configuré",
-        "severity": "warning",
-        "ref": "CIS 17.5.1 · ANSSI R-09",
-        "category": "Audit",
-        "check_key": "auditlogonevents",        # tout en minuscules — parse_gpttmpl normalise en lowercase
-        "section": "event_audit",
-        "threshold": 0,
-        "operator": "eq",
-        "remediation": "AuditLogonEvents = 3 (Success + Failure).",
-    },
-    {
-        "id": "AUDIT-002",
-        "title": "Audit de la gestion des comptes non configuré",
-        "severity": "warning",
-        "ref": "CIS 17.2.1 · ANSSI R-09",
-        "category": "Audit",
-        "check_key": "auditaccountmanage",
-        "section": "event_audit",
-        "threshold": 0,
-        "operator": "eq",
-        "remediation": "AuditAccountManage = 3 (Success + Failure).",
-    },
-    {
-        "id": "AUDIT-003",
-        "title": "Audit des modifications de stratégie non configuré",
-        "severity": "warning",
-        "ref": "CIS 17.7.1",
-        "category": "Audit",
-        "check_key": "auditpolicychange",
-        "section": "event_audit",
-        "threshold": 0,
-        "operator": "eq",
-        "remediation": "AuditPolicyChange = 3 (Success + Failure).",
-    },
-    {
-        "id": "LOG-001",
-        "title": "Taille du journal Sécurité insuffisante (< 1 Go recommandé)",
-        "severity": "warning",
-        "ref": "CIS 18.9.27.1 · ANSSI R-09",
-        "category": "Audit",
-        "check_key": "maximumlogsize",
-        "section": "security log",
-        "threshold": 1048576,
-        "operator": "lt",
-        "remediation": "MaximumLogSize ≥ 1048576 Ko (1 Go) pour le journal Sécurité. Un journal trop petit écrase les événements anciens — impossible de remonter un incident.",
-    },
-    {
-        "id": "AUDIT-006",
-        "title": "Audit de l'utilisation des privilèges non configuré",
-        "severity": "info",
-        "ref": "CIS 17.8.1 · ANSSI R-09",
-        "category": "Audit",
-        "check_key": "auditprivilegeusse",
-        "section": "event_audit",
-        "threshold": 0,
-        "operator": "eq",
-        "remediation": "AuditPrivilegeUse = 1 (succès). Détecte l'utilisation de droits sensibles (SeDebugPrivilege, SeTakeOwnershipPrivilege...) souvent exploités lors d'attaques.",
-    },
-    {
-        "id": "AUDIT-007",
-        "title": "Audit des événements système non configuré",
-        "severity": "info",
-        "ref": "CIS 17.9.1 · ANSSI R-09",
-        "category": "Audit",
-        "check_key": "auditsystemevents",
-        "section": "event_audit",
-        "threshold": 0,
-        "operator": "eq",
-        "remediation": "AuditSystemEvents = 1 (succès). Trace les démarrages/arrêts système, la modification de l'heure système et les pertes d'événements d'audit.",
+        "detail_ok": "Durée maximale du mot de passe dans les limites recommandées",
+        "remediation": "Configurer MaximumPasswordAge entre 60 et 365 jours.\n0 = illimité = un mot de passe compromis reste valide indéfiniment.",
     },
     {
         "id": "PWD-006",
         "title": "Durée minimale du mot de passe = 0 (changement immédiat possible)",
         "severity": "warning",
+        "absent_sev": None,         # Défaut Windows = 0 — mais sans historique ça ne change rien
         "ref": "CIS 1.1.4 · ANSSI R-03",
+        "rec_value": "≥ 1 jour",
         "category": "Mots de passe",
         "check_key": "minimumpasswordage",
         "section": "password_policy",
         "threshold": 1,
         "operator": "lt",
-        "remediation": "MinimumPasswordAge ≥ 1 jour. Sans durée minimale, un utilisateur peut changer son mot de passe 24 fois d'affilée pour retrouver l'ancien — contourne l'historique.",
+        "detail_ok": "Durée minimale du mot de passe correctement configurée",
+        "remediation": "Configurer MinimumPasswordAge ≥ 1 jour.\nSans durée minimale, un utilisateur peut changer son mot de passe 24 fois d'affilée pour retrouver l'ancien (contourne l'historique).",
     },
-    # ── Droits ──
+
+    # ══ AUTHENTIFICATION RÉSEAU ════════════════════════════════════════════════
+    {
+        "id": "AUTH-001",
+        "title": "Stockage des hash LAN Manager activé",
+        "severity": "critical",
+        "absent_sev": "critical",   # Défaut Windows Server 2008+ = 1 (stockage activé sur anciens OS)
+        "ref": "CIS 2.3.11.2 · ANSSI R-05 · MS Baseline v22H2",
+        "rec_value": "NoLMHash = 1 (ne pas stocker)",
+        "category": "Authentification",
+        "check_key": "nolmhash",
+        "section": "system_access",
+        "threshold": 1,
+        "operator": "ne",
+        "detail_ok": "Stockage des hash LM désactivé",
+        "remediation": "Configurer NoLMHash = 1 (activé).\nChemin GPO : Paramètres de sécurité → Options de sécurité → 'Sécurité réseau : ne pas stocker de valeur de hachage LAN Manager lors de la prochaine modification du mot de passe'.",
+    },
+    {
+        "id": "AUTH-002",
+        "title": "NTLMv1 autorisé (LmCompatibilityLevel insuffisant)",
+        "severity": "critical",
+        "absent_sev": "critical",   # Défaut Windows = 3 — NTLMv2 envoyé mais LM/NTLM acceptés en entrée
+        "ref": "CIS 2.3.11.7 · ANSSI R-06 · MS Baseline v22H2",
+        "rec_value": "5 = envoyer NTLMv2 uniquement, refuser LM et NTLM",
+        "category": "Authentification",
+        "check_key": "lmcompatibilitylevel",
+        "section": "system_access",
+        "threshold": 5,
+        "operator": "lt",
+        "detail_ok": "Niveau NTLM correctement configuré (NTLMv2 uniquement)",
+        "remediation": "Configurer LmCompatibilityLevel = 5.\nChemin GPO : Options de sécurité → 'Sécurité réseau : niveau d'authentification LAN Manager'.\nATTENTION : tester avant déploiement — les équipements anciens (NAS, imprimantes) peuvent ne supporter que NTLMv1.",
+    },
+    {
+        "id": "AUTH-003",
+        "title": "Seuil de verrouillage de compte désactivé ou trop élevé",
+        "severity": "warning",
+        "absent_sev": "warning",    # Défaut Windows = 0 = pas de verrouillage — brute force illimité
+        "ref": "CIS 1.2.1 · ANSSI R-04 · MS Baseline v22H2",
+        "rec_value": "Entre 5 et 10 tentatives",
+        "category": "Authentification",
+        "check_key": "lockoutbadcount",
+        "section": "system_access",
+        "threshold": 10,
+        "operator": "gt_or_zero",
+        "detail_ok": "Seuil de verrouillage correctement configuré",
+        "remediation": "Configurer LockoutBadCount entre 5 et 10 tentatives.\n0 = aucun verrouillage = attaque par force brute illimitée possible.\nChemin GPO : Stratégies de compte → Stratégie de verrouillage du compte.",
+    },
+    {
+        "id": "AUTH-004",
+        "title": "Durée de verrouillage de compte trop courte",
+        "severity": "warning",
+        "absent_sev": None,         # Pas pertinent si AUTH-003 n'est pas configuré
+        "ref": "CIS 1.2.2 · ANSSI R-04 · MS Baseline v22H2",
+        "rec_value": "≥ 15 minutes",
+        "category": "Authentification",
+        "check_key": "lockoutduration",
+        "section": "system_access",
+        "threshold": 15,
+        "operator": "lt",
+        "detail_ok": "Durée de verrouillage correctement configurée",
+        "remediation": "Configurer LockoutDuration ≥ 15 minutes (0 = verrouillage jusqu'à déverrouillage manuel par admin).",
+    },
+
+    # ══ DROITS & ACCÈS ═════════════════════════════════════════════════════════
     {
         "id": "PRIV-001",
-        "title": "Accès réseau anonyme autorisé (RestrictAnonymous = 0)",
+        "title": "Accès réseau anonyme non restreint",
         "severity": "critical",
-        "ref": "CIS 2.3.10.2 · ANSSI R-10",
+        "absent_sev": "warning",    # Défaut Windows = 0 — anonymes peuvent énumérer SAM
+        "ref": "CIS 2.3.10.2 · ANSSI R-10 · MS Baseline v22H2",
+        "rec_value": "1 (restreint) ou 2 (restreint strict)",
         "category": "Droits & Privilèges",
         "check_key": "restrictanonymous",
         "section": "system_access",
         "threshold": 1,
         "operator": "lt",
-        "remediation": "RestrictAnonymous = 1 minimum, 2 idéalement.",
+        "detail_ok": "Accès anonyme correctement restreint",
+        "remediation": "Configurer RestrictAnonymous ≥ 1.\nChemin GPO : Options de sécurité → 'Accès réseau : ne pas permettre l'énumération anonyme des comptes SAM'.",
     },
     {
         "id": "PRIV-002",
         "title": "Compte Invité activé",
         "severity": "warning",
-        "ref": "CIS 2.3.1.2",
+        "absent_sev": None,         # Défaut Windows = désactivé — OK
+        "ref": "CIS 2.3.1.2 · MS Baseline v22H2",
+        "rec_value": "0 (désactivé)",
         "category": "Droits & Privilèges",
         "check_key": "enableguestaccount",
         "section": "system_access",
         "threshold": 0,
         "operator": "ne",
-        "remediation": "EnableGuestAccount = 0 (désactivé).",
+        "detail_ok": "Compte Invité désactivé",
+        "remediation": "Désactiver le compte Invité via GPO : EnableGuestAccount = 0.\nChemin GPO : Options de sécurité → 'Comptes : statut du compte Invité'.",
     },
-    # ── Registre (Registry.pol) ──
+
+    # ══ REGISTRE (Registry.pol) ════════════════════════════════════════════════
     {
         "id": "SYS-001",
         "title": "WDigest activé — mots de passe en clair dans lsass",
         "severity": "critical",
-        "ref": "KB2871997 · ANSSI R-08",
+        "absent_sev": None,         # Défaut Win10/Server2016+ = 0 — OK nativement
+        "ref": "KB2871997 · ANSSI R-08 · MS Baseline v22H2",
+        "rec_value": "UseLogonCredential = 0",
         "category": "Système",
         "check_key": None,
         "section": "registry",
         "reg_key": r"HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest",
         "reg_value": "UseLogonCredential",
         "reg_expected": 0,
-        "remediation": "UseLogonCredential = 0 via GPO Préférences (Registre). Pas de redémarrage requis sur Win10/11.",
+        "detail_ok": "WDigest désactivé — mots de passe non stockés en clair",
+        "remediation": "Configurer UseLogonCredential = 0 via GPO Préférences (Registre) ou Modèles d'administration.\nSur les systèmes antérieurs à Win10 (KB2871997 non installé), ce paramètre n'existe pas — appliquer le patch KB2871997.",
     },
     {
         "id": "SYS-002",
-        "title": "SMBv1 non désactivé explicitement",
+        "title": "SMBv1 non désactivé explicitement par GPO",
         "severity": "warning",
-        "ref": "MS ADV170012 · ANSSI R-07",
+        "absent_sev": "warning",    # Défaut variable selon la version de Windows — mieux vaut l'expliciter
+        "ref": "MS ADV170012 · ANSSI R-07 · CIS 18.3.3",
+        "rec_value": "SMB1 = 0",
         "category": "Système",
         "check_key": None,
         "section": "registry",
         "reg_key": r"HKLM\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters",
         "reg_value": "SMB1",
         "reg_expected": 0,
-        "remediation": "SMB1 = 0 via GPO Registre. Ou PowerShell : Set-SmbServerConfiguration -EnableSMB1Protocol $false",
+        "detail_ok": "SMBv1 explicitement désactivé par GPO",
+        "remediation": "Désactiver SMBv1 via GPO Registre : HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters → SMB1 = 0.\nAlternativement : PowerShell 'Set-SmbServerConfiguration -EnableSMB1Protocol $false'\nVérifier d'abord les équipements legacy (anciens NAS, photocopieurs) qui peuvent en dépendre.",
     },
     {
         "id": "SYS-003",
         "title": "Pare-feu Windows désactivé par GPO",
-        "severity": "warning",
-        "ref": "CIS 9.1.1 · ANSSI R-11",
+        "severity": "critical",
+        "absent_sev": None,         # Défaut Windows = activé — OK
+        "ref": "CIS 9.1.1 · ANSSI R-11 · MS Baseline v22H2",
+        "rec_value": "EnableFirewall = 1",
         "category": "Système",
         "check_key": None,
         "section": "registry",
         "reg_key": r"HKLM\SOFTWARE\Policies\Microsoft\WindowsFirewall\DomainProfile",
         "reg_value": "EnableFirewall",
         "reg_expected": 1,
-        "remediation": "EnableFirewall = 1. Gérer les exceptions plutôt que de désactiver le pare-feu.",
+        "detail_ok": "Pare-feu Windows activé par GPO",
+        "remediation": "Ne jamais désactiver le pare-feu via GPO. Configurer les exceptions nécessaires via GPO Pare-feu Windows avec sécurité avancée.\nChemin GPO : Configuration ordinateur → Paramètres Windows → Paramètres de sécurité → Pare-feu Windows avec sécurité avancée.",
     },
     {
         "id": "SYS-004",
-        "title": "AutoPlay/AutoRun non désactivé",
+        "title": "AutoPlay/AutoRun non désactivé par GPO",
         "severity": "warning",
-        "ref": "CIS 18.9.8.1 · ANSSI R-14",
+        "absent_sev": "warning",    # Défaut Windows = activé — risque USB
+        "ref": "CIS 18.9.8.1 · ANSSI R-14 · MS Baseline v22H2",
+        "rec_value": "NoDriveTypeAutoRun = 255 (tous lecteurs)",
         "category": "Système",
         "check_key": None,
         "section": "registry",
         "reg_key": r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer",
         "reg_value": "NoDriveTypeAutoRun",
         "reg_expected": 255,
-        "remediation": "NoDriveTypeAutoRun = 0xFF (255) pour désactiver sur tous les lecteurs.",
+        "detail_ok": "AutoRun désactivé sur tous les lecteurs",
+        "remediation": "Configurer NoDriveTypeAutoRun = 255 (0xFF) pour désactiver AutoRun sur tous les types de lecteurs.\nChemin GPO : Modèles d'administration → Composants Windows → Stratégies de lecture automatique → 'Désactiver la lecture automatique'.",
     },
     {
         "id": "SYS-005",
-        "title": "Credential Guard non configuré",
+        "title": "Credential Guard / VBS non configuré par GPO",
         "severity": "info",
-        "ref": "MS Credential Guard · ANSSI",
+        "absent_sev": "info",       # Recommandé mais pas toujours possible (matériel requis)
+        "ref": "CIS 18.9.12.1 · ANSSI R-08 · MS Baseline v22H2",
+        "rec_value": "EnableVirtualizationBasedSecurity = 1",
         "category": "Système",
         "check_key": None,
         "section": "registry",
         "reg_key": r"HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard",
         "reg_value": "EnableVirtualizationBasedSecurity",
         "reg_expected": 1,
-        "remediation": "Activer via GPO Device Guard. Requis : UEFI, Secure Boot, TPM 2.0, Win10/11 64-bit.",
+        "detail_ok": "Credential Guard / VBS activé",
+        "remediation": "Activer Device Guard / Credential Guard via GPO.\nChemin GPO : Modèles d'administration → Système → Device Guard → 'Activer la sécurité basée sur la virtualisation'.\nPré-requis : UEFI, Secure Boot, TPM 2.0, CPU 64 bits avec virtualisation, Windows 10/11 ou Server 2016+.",
+    },
+
+    # ══ AUDIT ══════════════════════════════════════════════════════════════════
+    {
+        "id": "AUDIT-001",
+        "title": "Audit des connexions/déconnexions non configuré",
+        "severity": "warning",
+        "absent_sev": "warning",    # Sans audit, aucune traçabilité des connexions
+        "ref": "CIS 17.5.1 · ANSSI R-09 · MS Baseline v22H2",
+        "rec_value": "AuditLogonEvents = 3 (Succès + Échec)",
+        "category": "Audit",
+        "check_key": "auditlogonevents",
+        "section": "event_audit",
+        "threshold": 0,
+        "operator": "eq",
+        "detail_ok": "Audit des connexions activé (Succès + Échec)",
+        "remediation": "Configurer AuditLogonEvents = 3 (Succès + Échec).\nChemin GPO : Paramètres de sécurité → Stratégies locales → Stratégie d'audit.\nGénère les événements 4624 (connexion réussie) et 4625 (échec) — essentiels pour détecter les attaques par force brute.",
+    },
+    {
+        "id": "AUDIT-002",
+        "title": "Audit de la gestion des comptes non configuré",
+        "severity": "warning",
+        "absent_sev": "warning",
+        "ref": "CIS 17.2.1 · ANSSI R-09 · MS Baseline v22H2",
+        "rec_value": "AuditAccountManage = 3 (Succès + Échec)",
+        "category": "Audit",
+        "check_key": "auditaccountmanage",
+        "section": "event_audit",
+        "threshold": 0,
+        "operator": "eq",
+        "detail_ok": "Audit de gestion des comptes activé",
+        "remediation": "Configurer AuditAccountManage = 3 (Succès + Échec).\nGénère les événements 4720 (création compte), 4732 (ajout groupe), 4740 (verrouillage) — indispensables pour détecter les créations de backdoors.",
+    },
+    {
+        "id": "AUDIT-003",
+        "title": "Audit des modifications de stratégie non configuré",
+        "severity": "warning",
+        "absent_sev": "warning",
+        "ref": "CIS 17.7.1 · ANSSI R-09 · MS Baseline v22H2",
+        "rec_value": "AuditPolicyChange = 3 (Succès + Échec)",
+        "category": "Audit",
+        "check_key": "auditpolicychange",
+        "section": "event_audit",
+        "threshold": 0,
+        "operator": "eq",
+        "detail_ok": "Audit des modifications de stratégie activé",
+        "remediation": "Configurer AuditPolicyChange = 3 (Succès + Échec).\nDétecte toute modification des droits utilisateurs (4704), des stratégies d'audit (4719) et des relations d'approbation (4706).",
+    },
+    {
+        "id": "AUDIT-004",
+        "title": "Audit des accès aux objets non configuré",
+        "severity": "info",
+        "absent_sev": "info",
+        "ref": "CIS 17.6.1 · ANSSI R-09",
+        "rec_value": "AuditObjectAccess = 3 (Succès + Échec)",
+        "category": "Audit",
+        "check_key": "auditobjectaccess",
+        "section": "event_audit",
+        "threshold": 0,
+        "operator": "eq",
+        "detail_ok": "Audit des accès aux objets activé",
+        "remediation": "Configurer AuditObjectAccess = 3 pour auditer l'accès aux fichiers, registre et objets AD sensibles.\nNécessite d'activer l'audit sur les objets individuellement (SACL).",
+    },
+    {
+        "id": "AUDIT-005",
+        "title": "Audit avancé non prioritaire sur l'audit legacy",
+        "severity": "info",
+        "absent_sev": None,
+        "ref": "CIS 17.1.1 · ANSSI R-09",
+        "rec_value": "SCENoApplyLegacyAuditPolicy = 1",
+        "category": "Audit",
+        "check_key": "scenoapplylegacyauditpolicy",
+        "section": "registry_values",
+        "threshold": 1,
+        "operator": "ne",
+        "detail_ok": "Audit avancé prioritaire sur l'audit legacy",
+        "remediation": "Configurer SCENoApplyLegacyAuditPolicy = 1 pour éviter les conflits entre audit legacy et audit avancé (audit.csv).",
+    },
+    {
+        "id": "AUDIT-006",
+        "title": "Audit de l'utilisation des privilèges non configuré",
+        "severity": "info",
+        "absent_sev": "info",
+        "ref": "CIS 17.8.1 · ANSSI R-09",
+        "rec_value": "AuditPrivilegeUse = 1 (Succès minimum)",
+        "category": "Audit",
+        "check_key": "auditprivilegeusse",
+        "section": "event_audit",
+        "threshold": 0,
+        "operator": "eq",
+        "detail_ok": "Audit d'utilisation des privilèges activé",
+        "remediation": "Configurer AuditPrivilegeUse = 1 (succès).\nDétecte l'utilisation de SeDebugPrivilege, SeTakeOwnershipPrivilege — droits souvent exploités lors d'attaques.",
+    },
+    {
+        "id": "AUDIT-007",
+        "title": "Audit des événements système non configuré",
+        "severity": "info",
+        "absent_sev": "info",
+        "ref": "CIS 17.9.1 · ANSSI R-09",
+        "rec_value": "AuditSystemEvents = 1 (Succès minimum)",
+        "category": "Audit",
+        "check_key": "auditsystemevents",
+        "section": "event_audit",
+        "threshold": 0,
+        "operator": "eq",
+        "detail_ok": "Audit des événements système activé",
+        "remediation": "Configurer AuditSystemEvents = 1 (succès).\nTrace les démarrages/arrêts, modifications de l'heure système (4616), et pertes d'événements d'audit (1102).",
+    },
+    {
+        "id": "LOG-001",
+        "title": "Taille du journal Sécurité insuffisante",
+        "severity": "warning",
+        "absent_sev": "warning",    # Défaut Windows = 20 Mo — très insuffisant
+        "ref": "CIS 18.9.27.1 · ANSSI R-09 · MS Baseline v22H2",
+        "rec_value": "≥ 1 048 576 Ko (1 Go) — MS Baseline recommande 4 Go",
+        "category": "Audit",
+        "check_key": "maximumlogsize",
+        "section": "security log",
+        "threshold": 1048576,
+        "operator": "lt",
+        "detail_ok": "Taille du journal Sécurité suffisante",
+        "remediation": "Configurer MaximumLogSize ≥ 1 048 576 Ko (1 Go) minimum pour le journal Sécurité.\nChemin GPO : Paramètres de sécurité → Journal des événements → 'Taille maximale du journal de sécurité'.\nAvec un journal trop petit, les événements anciens sont écrasés — impossible de remonter un incident de plusieurs jours.",
+    },
+
+    # ══ KERBEROS ═══════════════════════════════════════════════════════════════
+    {
+        "id": "KRB-001",
+        "title": "Durée de vie des tickets Kerberos trop longue",
+        "severity": "warning",
+        "absent_sev": None,         # Défaut Windows = 10h — acceptable
+        "ref": "CIS 2.3.9.1 · ANSSI R-06 · MS Baseline v22H2",
+        "rec_value": "MaxTicketAge ≤ 10 heures",
+        "category": "Kerberos",
+        "check_key": "maxtickerage",
+        "section": "kerberos_policy",
+        "threshold": 10,
+        "operator": "gt",
+        "detail_ok": "Durée de vie des tickets Kerberos correcte",
+        "remediation": "Configurer MaxTicketAge ≤ 10h dans la Default Domain Policy.\nUn ticket long-lived donne plus de temps à un attaquant pour l'exploiter après vol (Pass-the-Ticket, Golden Ticket).",
+    },
+    {
+        "id": "KRB-002",
+        "title": "Tolérance d'horloge Kerberos trop élevée",
+        "severity": "warning",
+        "absent_sev": None,         # Défaut Windows = 5 min — OK
+        "ref": "CIS 2.3.9.3 · ANSSI R-06 · MS Baseline v22H2",
+        "rec_value": "MaxClockSkew ≤ 5 minutes",
+        "category": "Kerberos",
+        "check_key": "maxclockskew",
+        "section": "kerberos_policy",
+        "threshold": 5,
+        "operator": "gt",
+        "detail_ok": "Tolérance d'horloge Kerberos correcte",
+        "remediation": "Configurer MaxClockSkew ≤ 5 minutes.\nUne tolérance excessive facilite les attaques par replay de tickets. S'assurer que NTP est correctement configuré sur tous les postes.",
+    },
+    {
+        "id": "KRB-003",
+        "title": "Renouvellement des tickets Kerberos trop long",
+        "severity": "info",
+        "absent_sev": None,         # Défaut Windows = 7 jours — acceptable
+        "ref": "CIS 2.3.9.2 · ANSSI R-06",
+        "rec_value": "MaxRenewAge ≤ 7 jours",
+        "category": "Kerberos",
+        "check_key": "maxrenewage",
+        "section": "kerberos_policy",
+        "threshold": 7,
+        "operator": "gt",
+        "detail_ok": "Durée de renouvellement des tickets Kerberos correcte",
+        "remediation": "Configurer MaxRenewAge ≤ 7 jours pour limiter la durée pendant laquelle un ticket volé peut être renouvelé.",
     },
 ]
 
@@ -2519,100 +2675,102 @@ def int_val(v, default=0):
 def evaluate_rule_on_rsop(rule: dict, rsop_settings: dict, rsop_registry: dict) -> dict | None:
     """
     Évalue une règle sur le RSOP global.
-    Retourne un finding si la règle est violée, None si conforme.
-    'Non configuré dans le RSOP' = potentiellement un problème uniquement pour
-    les règles critiques de sécurité explicites.
-    """
-    section = rule['section']
-    operator = rule.get('operator', '')
 
-    # ── Règles registre (Registry.pol) ──
+    3 cas possibles :
+    1. Valeur explicitement mauvaise → finding avec sévérité de la règle
+    2. Paramètre absent des GPO :
+       - rule['absent_sev'] défini → finding avec cette sévérité + mention "non configuré"
+       - rule['absent_sev'] = None → conforme (valeur par défaut Windows acceptable)
+    3. Valeur correcte → conforme (retourne None)
+    """
+    section  = rule['section']
+    operator = rule.get('operator', '')
+    absent_sev = rule.get('absent_sev')
+
+    def _make_absent_finding():
+        """Finding 'non configuré dans les GPO' — à remonter uniquement si important."""
+        return {
+            'rule_id':       rule['id'],
+            'title':         rule['title'],
+            'severity':      absent_sev,
+            'ref':           rule['ref'],
+            'category':      rule['category'],
+            'remediation':   rule['remediation'],
+            'rec_value':     rule.get('rec_value', ''),
+            'detail':        (
+                f"Paramètre non configuré explicitement dans les GPO — "
+                f"la valeur par défaut Windows s'applique, ce qui peut être insuffisant. "
+                f"Valeur recommandée : {rule.get('rec_value', 'voir remédiation')}"
+            ),
+            'not_configured': True,
+        }
+
+    def _make_violation_finding(detail: str):
+        return {
+            'rule_id':       rule['id'],
+            'title':         rule['title'],
+            'severity':      rule['severity'],
+            'ref':           rule['ref'],
+            'category':      rule['category'],
+            'remediation':   rule['remediation'],
+            'rec_value':     rule.get('rec_value', ''),
+            'detail':        detail,
+            'not_configured': False,
+        }
+
+    # ── Règles registre (Registry.pol) ──────────────────────────────────────
     if section == 'registry':
         key_lower = rule['reg_key'].lower()
         val_lower = rule['reg_value'].lower()
-        expected = rule['reg_expected']
-        actual = rsop_registry.get((key_lower, val_lower), None)
+        expected  = rule['reg_expected']
+        actual    = rsop_registry.get((key_lower, val_lower), None)
 
         if actual is None:
-            # Non configuré via GPO = impossible de conclure sans SYSVOL
-            # Signaler en 'info' uniquement (pas une violation certaine)
-            return {
-                'rule_id': rule['id'],
-                'title': rule['title'],
-                'severity': 'info',
-                'ref': rule['ref'],
-                'category': rule['category'],
-                'remediation': rule['remediation'],
-                'detail': f"Non configuré via GPO (valeur attendue : {expected}). "
-                          f"Monter le SYSVOL pour vérifier la valeur réelle via Registry.pol.",
-                'not_configured': True,
-            }
-        if actual != expected:
-            return {
-                'rule_id': rule['id'],
-                'title': rule['title'],
-                'severity': rule['severity'],
-                'ref': rule['ref'],
-                'category': rule['category'],
-                'remediation': rule['remediation'],
-                'detail': f"Valeur appliquée : {actual} (attendu : {expected})",
-                'not_configured': False,
-            }
-        return None  # Conforme
+            # Pas configuré dans les GPO
+            if absent_sev:
+                return _make_absent_finding()
+            return None  # valeur par défaut Windows acceptable
 
-    # ── Règles GptTmpl.inf ──
-    sec = rsop_settings.get(section, {})
+        if actual != expected:
+            return _make_violation_finding(
+                f"Valeur appliquée par le RSOP : {actual} — attendu : {expected}"
+            )
+        return None  # conforme
+
+    # ── Règles GptTmpl.inf ───────────────────────────────────────────────────
+    sec      = rsop_settings.get(section, {})
     check_key = rule.get('check_key', '').lower()
-    raw = sec.get(check_key)
+    raw      = sec.get(check_key) if sec else None
 
     if raw is None:
-        # Non configuré dans le RSOP = la valeur par défaut Windows s'applique.
-        # On ne peut pas conclure à une violation sans lire le SYSVOL.
-        # On remonte uniquement en 'info' pour signaler que c'est à vérifier.
-        if rule['severity'] in ('critical', 'warning'):
-            return {
-                'rule_id': rule['id'],
-                'title': rule['title'],
-                'severity': 'info',   # Dégradé : on ne sait pas, pas une violation certaine
-                'ref': rule['ref'],
-                'category': rule['category'],
-                'remediation': rule['remediation'],
-                'detail': "Non configuré explicitement via GPO — valeur par défaut Windows appliquée. "
-                          "Monter le SYSVOL pour une analyse complète (Registry.pol + GptTmpl.inf).",
-                'not_configured': True,
-            }
-        return None
+        # Paramètre absent de toutes les GPO
+        if absent_sev:
+            return _make_absent_finding()
+        return None  # valeur par défaut Windows acceptable
 
-    actual = int_val(raw)
+    actual    = int_val(raw)
     threshold = rule.get('threshold', 0)
-    violated = False
+    violated  = False
 
-    if operator == 'lt' and actual < threshold:
-        violated = True
-    elif operator == 'gt' and actual > threshold and actual != 0:
-        violated = True
-    elif operator == 'gt_or_zero' and (actual == 0 or actual > threshold):
-        violated = True
-    elif operator == 'ne' and actual != threshold:
-        violated = True
-    elif operator == 'eq' and actual == threshold:
-        violated = True
+    if operator == 'lt'         and actual < threshold:             violated = True
+    elif operator == 'gt'       and actual > threshold and actual != 0: violated = True
+    elif operator == 'gt_or_zero' and (actual == 0 or actual > threshold): violated = True
+    elif operator == 'ne'       and actual != threshold:            violated = True
+    elif operator == 'eq'       and actual == threshold:            violated = True
 
     if violated:
-        op_str = {'lt': f'< {threshold}', 'gt': f'> {threshold}',
-                  'ne': f'≠ {threshold}', 'eq': str(threshold),
-                  'gt_or_zero': f'= 0 ou > {threshold}'}.get(operator, str(threshold))
-        return {
-            'rule_id': rule['id'],
-            'title': rule['title'],
-            'severity': rule['severity'],
-            'ref': rule['ref'],
-            'category': rule['category'],
-            'remediation': rule['remediation'],
-            'detail': f"Valeur appliquée par le RSOP : {actual} (attendu : {op_str})",
-            'not_configured': False,
-        }
-    return None  # Conforme
+        op_str = {
+            'lt':         f'< {threshold}',
+            'gt':         f'> {threshold}',
+            'ne':         f'≠ {threshold}',
+            'eq':         str(threshold),
+            'gt_or_zero': f'= 0 ou > {threshold}',
+        }.get(operator, str(threshold))
+        return _make_violation_finding(
+            f"Valeur appliquée par le RSOP : {actual} (attendu : {op_str}) — "
+            f"recommandé : {rule.get('rec_value', 'voir remédiation')}"
+        )
+    return None  # conforme
 
 
 def evaluate_rule_on_gpo(rule: dict, settings: dict, registry_entries: list) -> dict | None:
@@ -4055,11 +4213,38 @@ def analyze_gpos(gpos: list) -> dict:
             finding['action_label'] = "Créer une nouvelle GPO de sécurité"
 
     violated_ids = {f['rule_id'] for f in global_findings}
-    compliant_rules = [r for r in AUDIT_RULES if r['id'] not in violated_ids]
-    # Ajouter les règles REGVAL conformes
-    compliant_rules += [r for r in AUDIT_RULES_REGVAL
-                        if r['id'] not in violated_ids
-                        and rsop_regval.get(r['regval_key'].lower())]
+    compliant_rules = []
+    for r in AUDIT_RULES:
+        if r['id'] not in violated_ids:
+            # Vérifier que le paramètre est bien configuré (pas juste absent avec absent_sev=None)
+            sec = rsop_settings.get(r['section'], {})
+            check_key = r.get('check_key', '')
+            is_configured = (
+                (check_key and sec and check_key.lower() in sec) or
+                (r['section'] == 'registry' and
+                 (r.get('reg_key', '').lower(), r.get('reg_value', '').lower()) in rsop_registry)
+            )
+            compliant_rules.append({
+                'id':         r['id'],
+                'title':      r.get('detail_ok', r['title']),
+                'category':   r['category'],
+                'ref':        r['ref'],
+                'rec_value':  r.get('rec_value', ''),
+                'remediation':r['remediation'],
+                'configured': is_configured,
+            })
+    # Règles REGVAL conformes
+    for r in AUDIT_RULES_REGVAL:
+        if r['id'] not in violated_ids and rsop_regval.get(r['regval_key'].lower()):
+            compliant_rules.append({
+                'id':         r['id'],
+                'title':      r.get('detail_ok', r['title']),
+                'category':   r.get('category', ''),
+                'ref':        r['ref'],
+                'rec_value':  '',
+                'remediation':r['remediation'],
+                'configured': True,
+            })
 
     # 2. Par GPO → uniquement les paramètres explicitement mal configurés dans cette GPO
     gpo_reports       = []
@@ -4222,20 +4407,151 @@ def analyze_gpos(gpos: list) -> dict:
     conflicts_high = sum(1 for c in gpo_conflicts if c['is_security'])
     conflicts_low  = sum(1 for c in gpo_conflicts if not c['is_security'])
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # SCORING STYLE PINGCASTLE
+    # Score de RISQUE : 0 = aucun risque, 100 = risque maximal
+    # Chaque règle a un poids fixe par catégorie.
+    # Le score final = MAX des scores par catégorie (le pire domaine tire le score)
+    # Inspiré de PingCastle : une seule faille critique suffit à avoir un mauvais score.
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # Poids par règle (points de risque ajoutés au score de la catégorie)
+    # Plafond par catégorie : 100 pts max
+    RULE_WEIGHTS = {
+        # ── Authentification — vulnérabilités critiques d'auth réseau ──────────
+        'AUTH-001': 100,  # Hash LM stocké — cassé en secondes (rainbow tables)
+        'AUTH-002': 100,  # NTLMv1 autorisé — capturé et craqué facilement
+        'AUTH-003':  30,  # Pas de verrouillage — brute-force illimité
+        'AUTH-004':  15,  # Verrouillage trop court
+        # ── Mots de passe ──────────────────────────────────────────────────────
+        'PWD-001':   40,  # Longueur < 14 — craquable
+        'PWD-002':   25,  # Historique court — réutilisation cyclique
+        'PWD-003':   50,  # Pas de complexité — dictionnaire trivial
+        'PWD-004':   20,  # Durée illimitée ou excessive
+        'PWD-005':    5,  # Avertissement trop court
+        'PWD-006':   15,  # Durée minimale = 0 — contourne l'historique
+        # ── Système — exposition mémoire et protocoles ─────────────────────────
+        'SYS-001': 100,  # WDigest — mots de passe en clair dans lsass
+        'SYS-002':  70,  # SMBv1 — EternalBlue/WannaCry
+        'SYS-003':  40,  # Pare-feu désactivé
+        'SYS-004':  20,  # AutoRun actif — USB malveillante
+        'SYS-005':  10,  # Credential Guard absent
+        # ── UAC & Élévation ────────────────────────────────────────────────────
+        'UAC-001': 100,  # UAC désactivé — escalade silencieuse
+        'UAC-002':  80,  # Admins sans demande UAC
+        'UAC-003':  25,  # Compte admin intégré non filtré
+        'UAC-004':  80,  # Token plein comptes locaux — Pass-the-Hash
+        # ── Protocoles réseau ──────────────────────────────────────────────────
+        'SMB-001':  35,  # Signature SMB non requise — relay MITM
+        'LDAP-001': 80,  # Intégrité LDAP désactivée — LDAP relay
+        'LDAP-002': 20,  # LDAP pas au niveau max
+        'NTLM-001': 30,  # Trafic NTLM sortant non restreint
+        'RDP-001':  40,  # NLA non requis — BlueKeep
+        # ── Impression ────────────────────────────────────────────────────────
+        'PRINT-001': 90, # PrintNightmare — installation drivers non restreinte
+        # ── LSA & Protection mémoire ───────────────────────────────────────────
+        'LSA-001':  30,  # RunAsPPL non activé — Mimikatz
+        # ── Accès anonyme ──────────────────────────────────────────────────────
+        'PRIV-001': 50,  # Accès réseau anonyme autorisé
+        'PRIV-002': 15,  # Compte Invité activé
+        'ANON-001': 25,  # Everyone inclut anonymes
+        'ANON-002': 25,  # Partages accessibles anonymement
+        # ── Audit ─────────────────────────────────────────────────────────────
+        'AUDIT-001': 25,  # Audit connexions absent
+        'AUDIT-002': 20,  # Audit gestion comptes absent
+        'AUDIT-003': 20,  # Audit changements stratégie absent
+        'AUDIT-005': 10,  # Audit avancé non prioritaire
+        'AUDIT-006': 10,  # Audit privilèges absent
+        'AUDIT-007': 10,  # Audit événements système absent
+        'LOG-001':   15,  # Journal sécurité trop petit
+        # ── PowerShell ────────────────────────────────────────────────────────
+        'PS-001':   30,   # ScriptBlock Logging désactivé
+        # ── Kerberos ──────────────────────────────────────────────────────────
+        'KERB-002': 20,   # DES/RC4 non désactivé
+        # ── Droits utilisateurs dangereux ──────────────────────────────────────
+        'PRIV-R001': 100, # SeDebugPrivilege — Mimikatz direct
+        'PRIV-R002': 100, # SeTcbPrivilege — Act as OS
+        'PRIV-R003':  40, # SeTakeOwnership étendu
+        'PRIV-R004':  35, # SeBackupPrivilege étendu — exfiltration SAM
+        'PRIV-R005': 100, # SeLoadDriverPrivilege — driver malveillant Ring 0
+        # ── Préférences registre (Registry.xml) ────────────────────────────────
+        'REGXML-001': 100, # Partages admin activés — Pass-the-Hash trivial
+        'REGXML-002':  80, # Token plein comptes locaux
+        'REGXML-003': 100, # UAC désactivé via préférences
+        'REGXML-004': 100, # WDigest activé via préférences
+        'REGXML-005':  70, # SMBv1 activé via préférences
+        'REGXML-006':  40, # Pare-feu désactivé via préférences
+        'REGXML-007':  30, # ScriptBlock Logging désactivé via préférences
+    }
+
+    # Catégories de score (style PingCastle — score par domaine)
+    CATEGORY_RULES = {
+        'Authentification':  ['AUTH-001','AUTH-002','AUTH-003','AUTH-004',
+                              'PWD-001','PWD-002','PWD-003','PWD-004','PWD-005','PWD-006',
+                              'REGXML-004','KERB-002'],
+        'Privilèges':        ['UAC-001','UAC-002','UAC-003','UAC-004',
+                              'PRIV-001','PRIV-002','ANON-001','ANON-002',
+                              'PRIV-R001','PRIV-R002','PRIV-R003','PRIV-R004','PRIV-R005',
+                              'REGXML-001','REGXML-002','REGXML-003'],
+        'Sécurité réseau':   ['SMB-001','LDAP-001','LDAP-002','NTLM-001','RDP-001',
+                              'SYS-001','SYS-002','REGXML-005','REGXML-006'],
+        'Correctifs & Conf.':['SYS-003','SYS-004','SYS-005','PRINT-001','LSA-001',
+                              'REGXML-007','PS-001'],
+        'Audit & Traçabilité':['AUDIT-001','AUDIT-002','AUDIT-003','AUDIT-005',
+                               'AUDIT-006','AUDIT-007','LOG-001'],
+    }
+
+    def _compute_category_score(findings_ids: set, category_rules: list) -> int:
+        """Score de risque pour une catégorie = somme des poids, plafonné à 100."""
+        total = 0
+        for rule_id in category_rules:
+            if rule_id in findings_ids:
+                total += RULE_WEIGHTS.get(rule_id, 10)
+        return min(total, 100)
+
+    # Calculer les scores par catégorie
+    # On exclut les findings "non configuré" (not_configured=True) du score
+    # car ils indiquent un manque de visibilité, pas une vraie vulnérabilité confirmée
+    confirmed_findings = [f for f in global_findings if not f.get('not_configured')]
+    confirmed_ids = {f['rule_id'] for f in confirmed_findings}
+
+    category_scores = {
+        cat: _compute_category_score(confirmed_ids, rules)
+        for cat, rules in CATEGORY_RULES.items()
+    }
+
+    # Score global = MAX des catégories (comme PingCastle)
+    # La pire catégorie détermine le niveau de risque global
+    global_score = max(category_scores.values()) if category_scores else 0
+
+    # Niveau de risque en texte (style PingCastle)
+    if global_score >= 75:
+        risk_level = 'Critique'
+        risk_color = 'red'
+    elif global_score >= 50:
+        risk_level = 'Élevé'
+        risk_color = 'amber'
+    elif global_score >= 25:
+        risk_level = 'Modéré'
+        risk_color = 'amber'
+    else:
+        risk_level = 'Faible'
+        risk_color = 'green'
+
     criticals = sum(1 for f in global_findings if f['severity'] == 'critical')
     warnings  = sum(1 for f in global_findings if f['severity'] == 'warning')
     infos     = sum(1 for f in global_findings if f['severity'] == 'info')
-    # Pénalités supplémentaires : orphelines et conflits dégradent le score
-    orphan_penalty   = min(len(orphan_gpos) * 1, 10)       # max -10 pts
-    conflict_penalty = min(conflicts_high * 3 + conflicts_low, 15)  # max -15 pts
-    global_score = max(0, min(100,
-        100 - criticals * 15 - warnings * 5 - infos * 2
-        - orphan_penalty - conflict_penalty
-    ))
+    # Pénalités additionnelles (orphelines, conflits) — max +10 pts
+    orphan_penalty   = min(len(orphan_gpos) * 1, 5)
+    conflict_penalty = min(conflicts_high * 2 + conflicts_low, 5)
+    global_score = min(100, global_score + orphan_penalty + conflict_penalty)
 
     return {
-        'global_score': global_score,
-        'total_findings': len(global_findings),
+        'global_score':    global_score,
+        'risk_level':      risk_level,
+        'risk_color':      risk_color,
+        'category_scores': category_scores,
+        'total_findings':  len(global_findings),
         'criticals': criticals,
         'warnings': warnings,
         'infos': infos,
@@ -4266,7 +4582,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GPOctopus — {{ data.generated_at }}</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap');
 
@@ -4852,20 +5167,21 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <svg width="52" height="52" viewBox="0 0 52 52">
         <circle cx="26" cy="26" r="22" fill="none" stroke="var(--border2)" stroke-width="4"/>
         <circle cx="26" cy="26" r="22" fill="none"
-          stroke="{% if data.global_score>=70%}var(--green){% elif data.global_score>=40%}var(--amber){% else %}var(--red){% endif %}"
+          stroke="{% if data.global_score>=75%}var(--red){% elif data.global_score>=50%}var(--amber){% elif data.global_score>=25%}var(--amber){% else %}var(--green){% endif %}"
           stroke-width="4" stroke-linecap="round"
           stroke-dasharray="{{ (data.global_score/100*138.2)|round(1) }} 138.2"/>
       </svg>
       <div class="score-val">
-        <span class="n" style="color:{% if data.global_score>=70%}var(--green){% elif data.global_score>=40%}var(--amber){% else %}var(--red){% endif %}">{{ data.global_score }}</span>
+        <span class="n" style="color:{% if data.global_score>=75%}var(--red){% elif data.global_score>=25%}var(--amber){% else %}var(--green){% endif %}">{{ data.global_score }}</span>
         <span class="l">/100</span>
       </div>
     </div>
     <div class="score-info">
-      <div class="label" style="color:{% if data.global_score>=70%}var(--green){% elif data.global_score>=40%}var(--amber){% else %}var(--red){% endif %}">
-        {% if data.global_score>=70%}Satisfaisant{% elif data.global_score>=40%}À améliorer{% else %}Insuffisant{% endif %}
+      <div class="label" style="color:{% if data.global_score>=75%}var(--red){% elif data.global_score>=25%}var(--amber){% else %}var(--green){% endif %}">
+        {{ data.risk_level }}
       </div>
       <div class="sub">{{ data.criticals }} critique · {{ data.warnings }} alerte<br>{{ data.compliant_count }} conforme · {{ data.orphan_count }} orpheline</div>
+      <div style="font-size:9px;color:var(--txt3);margin-top:3px">Score de risque — 0=sûr, 100=critique</div>
     </div>
   </div>
 
@@ -4939,15 +5255,15 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <div class="metrics-row">
         <div class="metric-card red" onclick="showSub('security','critical')">
           <div class="mv">{{ data.criticals }}</div>
-          <div class="ml">🔴 Critiques à corriger</div>
+          <div class="ml">🔴 Critiques confirmés</div>
         </div>
         <div class="metric-card amber" onclick="showSub('security','warnings')">
           <div class="mv">{{ data.warnings }}</div>
-          <div class="ml">🟡 Alertes à surveiller</div>
+          <div class="ml">🟡 Alertes</div>
         </div>
         <div class="metric-card green" onclick="showSub('security','compliant')">
           <div class="mv">{{ data.compliant_count }}</div>
-          <div class="ml">✅ Paramètres conformes</div>
+          <div class="ml">✅ Conformes</div>
         </div>
         <div class="metric-card blue" onclick="showSub('security','conflicts')">
           <div class="mv">{{ data.conflicts_high + data.conflicts_low }}</div>
@@ -4955,21 +5271,47 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
         </div>
       </div>
 
-      <!-- Graphiques -->
-      <div class="charts-row">
-        <div class="chart-card">
-          <h3>Répartition des constatations</h3>
-          <div class="chart-wrap"><canvas id="chart-donut"></canvas></div>
-          <div class="donut-legend">
-            <div class="dl-item"><div class="dl-dot" style="background:var(--red)"></div><span>{{ data.criticals }} critique(s)</span></div>
-            <div class="dl-item"><div class="dl-dot" style="background:var(--amber)"></div><span>{{ data.warnings }} alerte(s)</span></div>
-            <div class="dl-item"><div class="dl-dot" style="background:var(--blue)"></div><span>{{ data.infos }} info(s)</span></div>
-            <div class="dl-item"><div class="dl-dot" style="background:var(--green)"></div><span>{{ data.compliant_count }} conforme(s)</span></div>
+      <!-- Score par catégorie style PingCastle -->
+      <div style="margin-bottom:24px">
+        <div class="section-title">📊 Score de risque par domaine
+          <span class="st-count" style="font-size:11px;color:var(--txt3);font-weight:400">0 = sûr · 100 = risque maximal · le pire détermine le score global</span>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+          {% for cat, score in data.category_scores.items() %}
+          {% if score >= 75 %}{% set cat_color = 'var(--red)' %}{% set cat_bg = 'var(--red-bg)' %}{% set cat_label = 'Critique' %}
+          {% elif score >= 50 %}{% set cat_color = 'var(--amber)' %}{% set cat_bg = 'var(--amber-bg)' %}{% set cat_label = 'Élevé' %}
+          {% elif score >= 25 %}{% set cat_color = 'var(--amber)' %}{% set cat_bg = 'var(--amber-bg)' %}{% set cat_label = 'Modéré' %}
+          {% else %}{% set cat_color = 'var(--green)' %}{% set cat_bg = 'var(--green-bg)' %}{% set cat_label = 'Faible' %}
+          {% endif %}
+          <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+            <div style="min-width:160px;font-size:12px;font-weight:500;color:var(--txt)">{{ cat }}</div>
+            <div style="flex:1;background:var(--surface2);border-radius:4px;height:8px;overflow:hidden">
+              <div style="height:100%;width:{{ score }}%;background:{{ cat_color }};border-radius:4px;transition:width .5s ease"></div>
+            </div>
+            <div style="min-width:38px;text-align:right;font-size:14px;font-weight:700;font-family:'JetBrains Mono',monospace;color:{{ cat_color }}">{{ score }}</div>
+            <div style="min-width:55px;font-size:10px;padding:2px 7px;border-radius:10px;background:{{ cat_bg }};color:{{ cat_color }};font-weight:600;text-align:center">{{ cat_label }}</div>
+          </div>
+          {% endfor %}
+          <!-- Score global -->
+          {% if data.global_score >= 75 %}{% set g_color = 'var(--red)' %}{% set g_bg = 'var(--red-bg)' %}
+          {% elif data.global_score >= 25 %}{% set g_color = 'var(--amber)' %}{% set g_bg = 'var(--amber-bg)' %}
+          {% else %}{% set g_color = 'var(--green)' %}{% set g_bg = 'var(--green-bg)' %}{% endif %}
+          <div style="padding:12px 16px;background:var(--surface2);display:flex;align-items:center;gap:12px">
+            <div style="min-width:160px;font-size:13px;font-weight:700;color:var(--txt)">Score global</div>
+            <div style="flex:1;background:var(--surface3);border-radius:4px;height:10px;overflow:hidden">
+              <div style="height:100%;width:{{ data.global_score }}%;background:{{ g_color }};border-radius:4px"></div>
+            </div>
+            <div style="min-width:38px;text-align:right;font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace;color:{{ g_color }}">{{ data.global_score }}</div>
+            <div style="min-width:55px;font-size:11px;padding:3px 8px;border-radius:10px;background:{{ g_bg }};color:{{ g_color }};font-weight:700;text-align:center">{{ data.risk_level }}</div>
           </div>
         </div>
-        <div class="chart-card">
-          <h3>Score par catégorie</h3>
-          <div class="chart-wrap"><canvas id="chart-radar"></canvas></div>
+
+        <!-- Explication du score -->
+        <div style="margin-top:10px;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:6px;font-size:11px;color:var(--txt2);line-height:1.6">
+          <strong style="color:var(--txt)">Comment lire ce score ?</strong><br>
+          Chaque catégorie est notée de 0 à 100 selon les failles confirmées détectées.
+          Le score global est le <strong>maximum</strong> des catégories — une seule faille critique suffit à avoir un score élevé.
+          Les findings "<em>non configuré</em>" n'impactent pas le score (manque de visibilité ≠ vulnérabilité confirmée).
         </div>
       </div>
 
@@ -5078,6 +5420,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
           <div class="fc-body">
             <div class="fc-detail">{{ f.detail }}</div>
             <div class="fc-ref">{{ f.ref }}</div>
+            {% if f.get('rec_value') %}<div style="font-size:11px;color:var(--blue);padding:4px 10px;background:var(--blue-bg);border-radius:4px;margin-bottom:6px">🎯 Valeur recommandée : <strong>{{ f.rec_value }}</strong></div>{% endif %}
             <div class="fc-reco">✅ {{ f.remediation }}</div>
             {% if f.get('pso_note') %}<div style="margin-top:6px;font-size:11px;padding:6px 10px;background:var(--amber-bg);border-radius:4px;color:var(--amber)">⚠ {{ f.pso_note }}</div>{% endif %}
             {% if f.source_gpos %}<div class="fc-sources">GPO source : {% for sg in f.source_gpos %}<span class="fc-gpo-link" onclick="openGPODetail('{{ sg.guid }}')">{{ sg.name }}</span>{% endfor %}</div>{% endif %}
@@ -5131,11 +5474,11 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
     </div>
   </div>
 
-  <!-- SUB : Conformes -->
+      <!-- SUB : Conformes -->
   <div id="sub-security-compliant" style="display:none">
     <div class="page-header">
       <h2>✅ Paramètres conformes</h2>
-      <p>Ces règles sont respectées dans votre AD</p>
+      <p>Ces paramètres sont correctement configurés dans vos GPO</p>
     </div>
     <div class="content-area">
       <div class="finding-list">
@@ -5145,12 +5488,17 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
             <div class="fc-sev good"></div>
             <div class="fc-main">
               <div class="fc-title">{{ r.title }}</div>
-              <div class="fc-meta"><span>{{ r.category }}</span><span>· {{ r.ref }}</span></div>
+              <div class="fc-meta">
+                <span>{{ r.category }}</span><span>· {{ r.ref }}</span>
+                {% if not r.configured %}<span style="color:var(--txt3);font-style:italic">· valeur par défaut acceptable</span>{% endif %}
+              </div>
             </div>
             <span class="fc-pill good">conforme</span>
             <span class="fc-arrow">▶</span>
           </div>
           <div class="fc-body">
+            {% if r.rec_value %}<div style="font-size:12px;color:var(--txt2);margin-bottom:6px">✅ Valeur recommandée : <strong>{{ r.rec_value }}</strong></div>{% endif %}
+            <div class="fc-ref">{{ r.ref }}</div>
             <div class="fc-detail">{{ r.remediation }}</div>
           </div>
         </div>
@@ -5408,8 +5756,6 @@ window.addEventListener('DOMContentLoaded', () => {
 
   try { _gpos = JSON.parse(document.getElementById('gpo-json').textContent); } catch(e){}
 
-  renderCharts();
-
   requestAnimationFrame(() => {
     document.getElementById('loader').classList.add('done');
     setTimeout(() => { const l=document.getElementById('loader'); if(l)l.remove(); }, 400);
@@ -5489,59 +5835,6 @@ function toggleTheme() {
   document.documentElement.setAttribute('data-theme', next);
   localStorage.setItem('gpo-theme', next);
   setTimeout(renderCharts, 100);
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// CHARTS
-// ══════════════════════════════════════════════════════════════════════
-let _charts={};
-function renderCharts(){
-  const isDark = document.documentElement.getAttribute('data-theme')==='dark';
-  const gc = isDark?'rgba(255,255,255,.06)':'rgba(0,0,0,.06)';
-  const tc = isDark?'#7a84a8':'#5a6285';
-
-  const dc = document.getElementById('chart-donut');
-  if(dc){
-    if(_charts.donut) _charts.donut.destroy();
-    _charts.donut = new Chart(dc,{
-      type:'doughnut',
-      data:{
-        labels:['Critiques','Alertes','Infos','Conformes'],
-        datasets:[{
-          data:[{{ data.criticals }},{{ data.warnings }},{{ data.infos }},{{ data.compliant_count }}],
-          backgroundColor:[isDark?'#e05252':'#c03030',isDark?'#d4892a':'#a86a10',isDark?'#4a7fd4':'#2655b0',isDark?'#3a9e72':'#1e7a54'],
-          borderWidth:0,hoverOffset:4
-        }]
-      },
-      options:{responsive:true,maintainAspectRatio:false,cutout:'65%',
-        plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.label} : ${c.parsed}`}}}}
-    });
-  }
-
-  const rc = document.getElementById('chart-radar');
-  if(rc){
-    if(_charts.radar) _charts.radar.destroy();
-    const cats={'Mots de passe':0,'Authentif.':0,'Audit':0,'UAC':0,'Système':0,'Accès':0};
-    const maxes={'Mots de passe':6,'Authentif.':7,'Audit':7,'UAC':4,'Système':6,'Accès':4};
-    _findingsData.forEach(f=>{
-      const t=(f.title+' '+f.category).toLowerCase();
-      if(t.includes('passe')||t.includes('password')) cats['Mots de passe']++;
-      else if(t.includes('ntlm')||t.includes('auth')||t.includes('kerberos')||t.includes('smb')) cats['Authentif.']++;
-      else if(t.includes('audit')||t.includes('journal')) cats['Audit']++;
-      else if(t.includes('uac')||t.includes('élév')) cats['UAC']++;
-      else if(t.includes('système')||t.includes('service')||t.includes('pare-feu')||t.includes('wdigest')) cats['Système']++;
-      else cats['Accès']++;
-    });
-    const labels=Object.keys(cats);
-    const scores=labels.map(l=>Math.max(0,Math.round((1-cats[l]/(maxes[l]||1))*100)));
-    _charts.radar = new Chart(rc,{
-      type:'radar',
-      data:{labels,datasets:[{data:scores,backgroundColor:isDark?'rgba(74,127,212,.12)':'rgba(38,85,176,.1)',borderColor:isDark?'#4a7fd4':'#2655b0',borderWidth:2,pointBackgroundColor:isDark?'#4a7fd4':'#2655b0',pointRadius:3}]},
-      options:{responsive:true,maintainAspectRatio:false,
-        scales:{r:{min:0,max:100,grid:{color:gc},ticks:{color:tc,backdropColor:'transparent',stepSize:25,font:{size:10}},pointLabels:{color:tc,font:{size:10}}}},
-        plugins:{legend:{display:false}}}
-    });
-  }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -6374,7 +6667,7 @@ Exemples :
 
     print("[*] Analyse RSOP…")
     report = analyze_gpos(gpos)
-    print(f"[+] Score global : {report['global_score']}/100")
+    print(f"[+] Score de risque : {report['global_score']}/100 — {report['risk_level']}")
     print(f"[+] Critiques={report['criticals']}  Warnings={report['warnings']}  Conformes={report['compliant_count']}")
 
     if args.json:
