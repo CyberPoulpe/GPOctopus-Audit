@@ -4180,6 +4180,120 @@ def _format_gpo_content(gpo: dict) -> list:
     return sections
 
 
+
+# ─── GPO par défaut Windows AD ────────────────────────────────────────────────
+# Ces GPO ne doivent JAMAIS être modifiées — créer des GPO dédiées à la place.
+# Si elles ont été modifiées, c'est un écart de configuration à signaler.
+
+DEFAULT_GPOS = {
+    '{31B2F340-016D-11D2-945F-00C04FB984F9}': {
+        'name': 'Default Domain Policy',
+        'purpose': 'Politique de mots de passe et de verrouillage du domaine uniquement',
+        'should_contain': ['password_policy', 'system_access', 'kerberos_policy'],
+        'should_not_contain': [
+            'registry_entries', 'printers', 'drives', 'scripts',
+            'scheduled_tasks', 'groups', 'registry_xml_machine',
+        ],
+    },
+    '{6AC1786C-016F-11D2-945F-00C04FB984F9}': {
+        'name': 'Default Domain Controllers Policy',
+        'purpose': 'Droits utilisateurs sur les contrôleurs de domaine uniquement',
+        'should_contain': ['privilege_rights', 'event_audit'],
+        'should_not_contain': [
+            'registry_entries', 'printers', 'drives', 'scripts',
+            'scheduled_tasks', 'groups', 'registry_xml_machine',
+            'password_policy',
+        ],
+    },
+}
+
+
+def check_default_gpo_modifications(gpos: list) -> list:
+    """
+    Détecte si les GPO par défaut ont été modifiées au-delà de leur usage normal.
+    Retourne une liste de findings d'avertissement.
+    """
+    findings = []
+
+    for gpo in gpos:
+        guid = gpo.get('guid', '').upper()
+        default_info = DEFAULT_GPOS.get(guid)
+        if not default_info:
+            continue
+
+        name = default_info['name']
+        purpose = default_info['purpose']
+        should_not = default_info['should_not_contain']
+
+        # Vérifier la présence de types de contenu non autorisés
+        problematic = []
+        for key in should_not:
+            content = gpo.get(key)
+            if content:
+                labels = {
+                    'registry_entries':    'clés de registre (Registry.pol)',
+                    'printers':            'imprimantes',
+                    'drives':              'lecteurs réseau',
+                    'scripts':             'scripts',
+                    'scheduled_tasks':     'tâches planifiées',
+                    'groups':              'groupes locaux',
+                    'registry_xml_machine':'préférences registre XML',
+                    'password_policy':     'politique de mots de passe',
+                }
+                problematic.append(labels.get(key, key))
+
+        # Vérifier aussi dans les settings les sections inattendues
+        settings = gpo.get('settings', {})
+        if guid == '{6AC1786C-016F-11D2-945F-00C04FB984F9}':
+            # DDCP ne devrait pas avoir de politique de mots de passe
+            if settings.get('password_policy'):
+                pw = settings['password_policy']
+                # Ignorer si vide ou seulement des métadonnées
+                if any(v for v in pw.values() if v):
+                    problematic.append('politique de mots de passe (doit être dans Default Domain Policy)')
+
+        if problematic:
+            findings.append({
+                'rule_id':    f'DEFAULT-GPO-{guid[:8]}',
+                'title':      f'GPO par défaut modifiée : {name}',
+                'severity':   'warning',
+                'ref':        'Bonne pratique AD · ANSSI R-AD · MS Best Practices',
+                'category':   'Gouvernance GPO',
+                'rec_value':  'Ne jamais modifier ces GPO — créer des GPO dédiées',
+                'remediation': (
+                    f'La GPO "{name}" contient des paramètres non standards : '
+                    + ', '.join(problematic) + '.\n\n'
+                    f'📍 Bonne pratique : cette GPO doit servir UNIQUEMENT à : {purpose}\n\n'
+                    'Créer des GPO dédiées pour tout autre paramètre :\n'
+                    '  • GPO_Securite_Postes → paramètres de sécurité postes\n'
+                    '  • GPO_Audit → configuration de l\'audit\n'
+                    '  • GPO_Registre → paramètres de registre\n\n'
+                    'Modifier les GPO par défaut rend la gestion imprévisible et '
+                    'complique le dépannage lors d\'incidents.'
+                ),
+                'detail': (
+                    f'Contenu détecté hors usage normal : {", ".join(problematic)}. '
+                    f'Usage attendu de cette GPO : {purpose}.'
+                ),
+                'not_configured': False,
+                'source_gpos': [{'name': gpo['name'], 'guid': gpo['guid']}],
+            })
+        else:
+            # GPO par défaut non modifiée — c'est bien
+            findings.append({
+                'rule_id':    f'DEFAULT-GPO-OK-{guid[:8]}',
+                'title':      f'{name} — non modifiée ✓',
+                'severity':   'good',
+                'ref':        'Bonne pratique AD · ANSSI R-AD',
+                'category':   'Gouvernance GPO',
+                'rec_value':  'Correct',
+                'remediation':'',
+                'detail':     f'La GPO par défaut "{name}" n\'a pas été modifiée — conforme aux bonnes pratiques.',
+                'not_configured': False,
+            })
+
+    return findings
+
 def analyze_gpos(gpos: list) -> dict:
     if not gpos:
         print("[!] Aucune GPO collectée — vérifiez la connexion LDAP et les droits du compte.")
@@ -4219,10 +4333,43 @@ def analyze_gpos(gpos: list) -> dict:
     rsop_privrights = rsop_settings.get('privilege_rights', {})
     global_findings += evaluate_privright_rules(rsop_privrights)
 
-    # Enrichir chaque finding avec : quelles GPO contiennent ce paramètre + action recommandée
-    all_rules_by_id = {r['id']: r for r in AUDIT_RULES + AUDIT_RULES_REGVAL + AUDIT_RULES_REGISTRY_XML}
+    # ── Vérification des GPO par défaut ──────────────────────────────────────
+    # Détecter si Default Domain Policy / Default Domain Controllers Policy
+    # ont été modifiées au-delà de leur usage normal
+    default_gpo_findings = check_default_gpo_modifications(gpos)
+    for f in default_gpo_findings:
+        if f['severity'] == 'warning':
+            global_findings.append(f)
+        # Les 'good' sont ajoutés aux conformes plus bas
+
+    # ── Exclure les GPO par défaut des source_gpos dans les remediations ──────
+    # On ne doit pas conseiller de modifier Default Domain Policy / DDCP
+    DEFAULT_GUIDS = set(DEFAULT_GPOS.keys())
+    for finding in global_findings:
+        if 'source_gpos' in finding:
+            # Filtrer les GPO par défaut des sources
+            non_default = [g for g in finding['source_gpos']
+                          if g['guid'].upper() not in DEFAULT_GUIDS]
+            default_sources = [g for g in finding['source_gpos']
+                               if g['guid'].upper() in DEFAULT_GUIDS]
+
+            finding['source_gpos'] = non_default
+
+            # Si le paramètre problématique vient d'une GPO par défaut,
+            # ajouter une note dans la remédiation
+            if default_sources:
+                default_names = ', '.join(g['name'] for g in default_sources)
+                finding['default_gpo_note'] = (
+                    f"⚠ Ce paramètre est configuré dans : {default_names}. "
+                    f"Ne pas modifier cette GPO — créer une GPO dédiée avec la valeur correcte "
+                    f"et la lier aux OU appropriées. La nouvelle GPO écrasera la valeur de la GPO par défaut."
+                )
+                if not finding['source_gpos']:
+                    # Tous les findings viennent de GPO par défaut → suggérer de créer une GPO
+                    finding['action_label'] = "Créer une nouvelle GPO dédiée (ne pas modifier la GPO par défaut)"
     for finding in global_findings:
         rid = finding['rule_id']
+        all_rules_by_id = {r['id']: r for r in AUDIT_RULES + AUDIT_RULES_REGVAL + AUDIT_RULES_REGISTRY_XML}
         rule = all_rules_by_id.get(rid, {})
         source_gpos = []  # GPO qui contiennent ce paramètre problématique
 
@@ -4364,7 +4511,18 @@ def analyze_gpos(gpos: list) -> dict:
                                   if s['title'] not in EXCLUDE_TITLES or len(s.get('params', [])) <= 20]
         gpo_content_index[gpo['guid']] = content_sections_slim
 
-    # 3. Redondances (même paramètre dans plusieurs GPO)
+    # Ajouter les GPO par défaut non modifiées dans les conformes
+    for f in default_gpo_findings:
+        if f['severity'] == 'good':
+            compliant_rules.append({
+                'id':         f['rule_id'],
+                'title':      f['title'],
+                'category':   f['category'],
+                'ref':        f['ref'],
+                'rec_value':  '',
+                'remediation':'',
+                'configured': True,
+            })
     param_seen = {}
     for gpo in gpos:
         for section, params in gpo.get('settings', {}).items():
@@ -5472,6 +5630,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
             <div class="fc-ref">{{ f.ref }}</div>
             {% if f.get('rec_value') %}<div style="font-size:11px;color:var(--blue);padding:4px 10px;background:var(--blue-bg);border-radius:4px;margin-bottom:6px">🎯 Valeur recommandée : <strong>{{ f.rec_value }}</strong></div>{% endif %}
             <div class="fc-reco">✅ {{ f.remediation }}</div>
+            {% if f.get('default_gpo_note') %}<div style="margin-top:6px;font-size:11px;padding:8px 12px;background:rgba(212,137,42,.08);border:1px solid rgba(212,137,42,.3);border-radius:4px;color:var(--amber);line-height:1.5">{{ f.default_gpo_note }}</div>{% endif %}
             {% if f.get('pso_note') %}<div style="margin-top:6px;font-size:11px;padding:6px 10px;background:var(--amber-bg);border-radius:4px;color:var(--amber)">⚠ {{ f.pso_note }}</div>{% endif %}
             {% if f.source_gpos %}<div class="fc-sources">GPO source : {% for sg in f.source_gpos %}<span class="fc-gpo-link" onclick="openGPODetail('{{ sg.guid }}')">{{ sg.name }}</span>{% endfor %}</div>{% endif %}
             {% if f.action_label %}<div style="margin-top:6px;font-size:11px;padding:4px 8px;background:var(--surface2);border-radius:3px;color:var(--txt2)">🔧 {{ f.action_label }}</div>{% endif %}
