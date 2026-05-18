@@ -4778,6 +4778,7 @@ def analyze_gpos(gpos: list) -> dict:
         'generated_at':      datetime.now().strftime('%d/%m/%Y %H:%M'),
         'gpo_count':         len(gpos),
         'wmi_count':         sum(1 for g in gpos if g.get('wmi_filter')),
+        'default_gpo_status': [f for f in default_gpo_findings],
         'search_index':      build_search_index(_enrich_gpos_for_search(gpos, gpo_reports)),
     }
 
@@ -5478,6 +5479,37 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
           <div class="ml">⚡ Conflits GPO</div>
         </div>
       </div>
+
+      <!-- Bandeau GPO par défaut -->
+      {% if data.default_gpo_status %}
+      <div style="margin-bottom:20px">
+        <div class="section-title">🛡 GPO par défaut Windows</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          {% for f in data.default_gpo_status %}
+          {% if f.severity == 'warning' %}
+          <div style="background:var(--amber-bg);border:1px solid rgba(212,137,42,.35);border-left:4px solid var(--amber);border-radius:8px;padding:14px 16px">
+            <div style="display:flex;align-items:flex-start;gap:12px">
+              <span style="font-size:18px;flex-shrink:0">⚠️</span>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:600;color:var(--amber);margin-bottom:4px">{{ f.title }}</div>
+                <div style="font-size:12px;color:var(--txt2);margin-bottom:8px">{{ f.detail }}</div>
+                <div style="font-size:11px;color:var(--txt2);background:var(--surface2);border-radius:6px;padding:10px 12px;line-height:1.7;white-space:pre-wrap;font-family:'JetBrains Mono',monospace">{{ f.remediation }}</div>
+              </div>
+            </div>
+          </div>
+          {% else %}
+          <div style="background:var(--green-bg);border:1px solid rgba(58,158,114,.25);border-left:4px solid var(--green);border-radius:8px;padding:12px 16px;display:flex;align-items:center;gap:10px">
+            <span style="font-size:16px">✅</span>
+            <div>
+              <div style="font-size:13px;font-weight:500;color:var(--green)">{{ f.title }}</div>
+              <div style="font-size:11px;color:var(--txt2);margin-top:2px">{{ f.detail }}</div>
+            </div>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
 
       <!-- Score par catégorie style PingCastle -->
       <div style="margin-bottom:24px">
