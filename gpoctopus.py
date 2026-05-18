@@ -4211,9 +4211,114 @@ DEFAULT_GPOS = {
 def check_default_gpo_modifications(gpos: list) -> list:
     """
     Détecte si les GPO par défaut ont été modifiées au-delà de leur usage normal.
-    Retourne une liste de findings d'avertissement.
+    Génère un plan de migration détaillé : quoi déplacer, vers quelle GPO, dans quel ordre.
     """
     findings = []
+
+    # Table de classification : quel type de contenu → quelle GPO dédiée recommandée
+    MIGRATION_GROUPS = {
+        'registry_entries': {
+            'gpo_name': 'O-Securite-Registre',
+            'label':    'Clés de registre (Registry.pol)',
+            'scope':    'Configuration ordinateur → Préférences → Registre',
+            'ou_link':  'Domaine ou OU Computers selon la cible',
+        },
+        'registry_xml_machine': {
+            'gpo_name': 'O-Preferences-Registre',
+            'label':    'Préférences registre XML (Registry.xml)',
+            'scope':    'Configuration ordinateur → Préférences → Registre',
+            'ou_link':  'Domaine ou OU Computers selon la cible',
+        },
+        'printers': {
+            'gpo_name': 'O-Imprimantes-Machine',
+            'label':    'Imprimantes machine',
+            'scope':    'Configuration ordinateur → Préférences → Imprimantes',
+            'ou_link':  'OU contenant les postes concernés',
+        },
+        'printers_user': {
+            'gpo_name': 'U-Imprimantes',
+            'label':    'Imprimantes utilisateur',
+            'scope':    'Configuration utilisateur → Préférences → Imprimantes',
+            'ou_link':  'OU contenant les utilisateurs concernés',
+        },
+        'drives': {
+            'gpo_name': 'U-Lecteurs-Reseau',
+            'label':    'Lecteurs réseau',
+            'scope':    'Configuration utilisateur → Préférences → Lecteurs mappés',
+            'ou_link':  'OU contenant les utilisateurs concernés',
+        },
+        'scripts': {
+            'gpo_name': 'O-Scripts-Demarrage',
+            'label':    'Scripts de démarrage/arrêt',
+            'scope':    'Configuration ordinateur → Paramètres Windows → Scripts',
+            'ou_link':  'Domaine ou OU selon la portée des scripts',
+        },
+        'scheduled_tasks': {
+            'gpo_name': 'O-Taches-Planifiees',
+            'label':    'Tâches planifiées',
+            'scope':    'Configuration ordinateur → Préférences → Tâches planifiées',
+            'ou_link':  'OU contenant les machines cibles',
+        },
+        'groups': {
+            'gpo_name': 'O-Groupes-Locaux',
+            'label':    'Groupes locaux',
+            'scope':    'Configuration ordinateur → Préférences → Utilisateurs et groupes locaux',
+            'ou_link':  'OU contenant les machines cibles',
+        },
+        'services': {
+            'gpo_name': 'O-Services-Windows',
+            'label':    'Services Windows',
+            'scope':    'Configuration ordinateur → Préférences → Services',
+            'ou_link':  'OU contenant les machines cibles',
+        },
+        'software_machine': {
+            'gpo_name': 'O-Logiciels',
+            'label':    'Installation de logiciels',
+            'scope':    'Configuration ordinateur → Préférences → Applications',
+            'ou_link':  'OU contenant les machines cibles',
+        },
+        'network_shares': {
+            'gpo_name': 'O-Partages-Reseau',
+            'label':    'Partages réseau',
+            'scope':    'Configuration ordinateur → Préférences → Partages réseau',
+            'ou_link':  'OU Servers ou Computers selon la cible',
+        },
+        'audit_csv': {
+            'gpo_name': 'O-Audit-Avance',
+            'label':    'Audit avancé (audit.csv)',
+            'scope':    'Configuration ordinateur → Paramètres Windows → Paramètres de sécurité → Configuration avancée stratégie d\'audit',
+            'ou_link':  'Domaine (tous les postes) ou OU Servers pour les serveurs',
+        },
+    }
+
+    # Sections GptTmpl.inf inattendues dans la DDCP
+    SETTINGS_MIGRATION = {
+        'password_policy': {
+            'gpo_name': 'Default Domain Policy',
+            'label':    'Politique de mots de passe',
+            'scope':    'Configuration ordinateur → Stratégies → Paramètres de sécurité → Stratégies de compte',
+            'ou_link':  'Doit rester dans Default Domain Policy uniquement',
+            'warning':  'La politique de mots de passe DOIT être dans Default Domain Policy, pas dans DDCP',
+        },
+        'event_audit': {
+            'gpo_name': 'O-Audit-Evenements',
+            'label':    'Audit des événements',
+            'scope':    'Configuration ordinateur → Stratégies → Paramètres de sécurité → Stratégies locales → Stratégie d\'audit',
+            'ou_link':  'Domaine pour tous, ou OU Servers/Workstations si différenciation',
+        },
+        'registry_values': {
+            'gpo_name': 'O-Securite-Options',
+            'label':    'Options de sécurité (Registry Values)',
+            'scope':    'Configuration ordinateur → Stratégies → Paramètres de sécurité → Stratégies locales → Options de sécurité',
+            'ou_link':  'Domaine ou OU selon la portée',
+        },
+        'system_access': {
+            'gpo_name': 'O-Securite-Options',
+            'label':    'Paramètres d\'accès système',
+            'scope':    'Configuration ordinateur → Stratégies → Paramètres de sécurité → Stratégies locales → Options de sécurité',
+            'ou_link':  'Domaine ou OU selon la portée',
+        },
+    }
 
     for gpo in gpos:
         guid = gpo.get('guid', '').upper()
@@ -4221,74 +4326,139 @@ def check_default_gpo_modifications(gpos: list) -> list:
         if not default_info:
             continue
 
-        name = default_info['name']
-        purpose = default_info['purpose']
+        name     = default_info['name']
+        purpose  = default_info['purpose']
         should_not = default_info['should_not_contain']
 
-        # Vérifier la présence de types de contenu non autorisés
-        problematic = []
+        # ── Détecter le contenu problématique et construire le plan de migration ──
+        migration_plan = []   # liste de {gpo_cible, label, items, scope, ou_link}
+        problematic_labels = []
+
         for key in should_not:
             content = gpo.get(key)
-            if content:
-                labels = {
-                    'registry_entries':    'clés de registre (Registry.pol)',
-                    'printers':            'imprimantes',
-                    'drives':              'lecteurs réseau',
-                    'scripts':             'scripts',
-                    'scheduled_tasks':     'tâches planifiées',
-                    'groups':              'groupes locaux',
-                    'registry_xml_machine':'préférences registre XML',
-                    'password_policy':     'politique de mots de passe',
-                }
-                problematic.append(labels.get(key, key))
+            if not content:
+                continue
+            info = MIGRATION_GROUPS.get(key)
+            if not info:
+                continue
+            problematic_labels.append(info['label'])
 
-        # Vérifier aussi dans les settings les sections inattendues
+            # Extraire les détails du contenu pour le plan
+            items_detail = []
+            if key == 'registry_entries':
+                for (reg_key, vname, rtype, val) in (content or [])[:10]:
+                    items_detail.append(f"{reg_key.split(chr(92))[-1]} → {vname} = {val}")
+            elif key == 'scripts':
+                for scope_k, scope_label in [('startup','Démarrage'),('shutdown','Arrêt'),('logon','Ouverture session'),('logoff','Fermeture session')]:
+                    for sc in (content.get(scope_k) or []):
+                        cmd = sc.get('cmd','') if isinstance(sc, dict) else str(sc)
+                        if cmd:
+                            items_detail.append(f"[{scope_label}] {cmd}")
+            elif key == 'printers':
+                for p in (content or [])[:5]:
+                    items_detail.append(f"{p.get('name','')} → {p.get('path','')}")
+            elif key == 'drives':
+                for d in (content or [])[:5]:
+                    items_detail.append(f"{d.get('letter','')}:\\ → {d.get('path','')}")
+            elif key == 'scheduled_tasks':
+                for t in (content or [])[:5]:
+                    items_detail.append(f"{t.get('name','')} : {t.get('cmd','')}")
+            elif key == 'groups':
+                for g in (content or [])[:5]:
+                    members = ', '.join(m.get('name','') for m in g.get('members',[])[:3])
+                    items_detail.append(f"{g.get('name','')} ← {members}")
+            elif key == 'services':
+                for s in (content or [])[:5]:
+                    items_detail.append(f"{s.get('name','')} : {s.get('startup','')}")
+            elif key == 'registry_xml_machine':
+                for r in (content or [])[:5]:
+                    items_detail.append(f"{r.get('key','').split(chr(92))[-1]} → {r.get('name','')} = {r.get('value','')}")
+            elif key == 'audit_csv':
+                for a in (content or [])[:5]:
+                    items_detail.append(f"{a.get('subcategory','')} : {a.get('inclusion','')}")
+
+            extra = max(0, len(items_detail) - 8)
+            migration_plan.append({
+                'gpo_name':    info['gpo_name'],
+                'label':       info['label'],
+                'scope':       info['scope'],
+                'ou_link':     info['ou_link'],
+                'items':       items_detail[:8],
+                'extra_count': extra,
+                'count':      len(content) if isinstance(content, list) else
+                              sum(len(v) for v in content.values() if isinstance(v, list))
+                              if isinstance(content, dict) else 1,
+            })
+
+        # Sections settings inattendues (pour DDCP principalement)
         settings = gpo.get('settings', {})
         if guid == '{6AC1786C-016F-11D2-945F-00C04FB984F9}':
-            # DDCP ne devrait pas avoir de politique de mots de passe
-            if settings.get('password_policy'):
-                pw = settings['password_policy']
-                # Ignorer si vide ou seulement des métadonnées
-                if any(v for v in pw.values() if v):
-                    problematic.append('politique de mots de passe (doit être dans Default Domain Policy)')
+            allowed_sections = {'privilege_rights', 'event_audit', 'system_access', 'registry_values'}
+            for section, params in settings.items():
+                if section not in allowed_sections and params and any(v for v in params.values() if v):
+                    info = SETTINGS_MIGRATION.get(section, {
+                        'gpo_name': 'O-Securite-Custom',
+                        'label': section,
+                        'scope': 'Configuration ordinateur → Paramètres de sécurité',
+                        'ou_link': 'Selon la portée du paramètre',
+                    })
+                    if info.get('warning'):
+                        problematic_labels.append(f"{info['label']} ⚠ {info['warning']}")
+                    else:
+                        problematic_labels.append(info['label'])
+                        migration_plan.append({
+                            'gpo_name': info['gpo_name'],
+                            'label':    info['label'],
+                            'scope':    info['scope'],
+                            'ou_link':  info['ou_link'],
+                            'params_list': [f"{k} = {v}" for k, v in list(params.items())[:5]],
+                            'count':    len(params),
+                        })
 
-        if problematic:
+        if problematic_labels:
+            # Dédupliquer le plan de migration par GPO cible
+            merged_plan = {}
+            for step in migration_plan:
+                key = step['gpo_name']
+                if key not in merged_plan:
+                    merged_plan[key] = dict(step)
+                else:
+                    merged_plan[key]['params_list'] += step['params_list']
+                    merged_plan[key]['count'] += step['count']
+                    if step['label'] not in merged_plan[key]['label']:
+                        merged_plan[key]['label'] += ' + ' + step['label']
+
             findings.append({
-                'rule_id':    f'DEFAULT-GPO-{guid[:8]}',
-                'title':      f'GPO par défaut modifiée : {name}',
-                'severity':   'warning',
-                'ref':        'Bonne pratique AD · ANSSI R-AD · MS Best Practices',
-                'category':   'Gouvernance GPO',
-                'rec_value':  'Ne jamais modifier ces GPO — créer des GPO dédiées',
-                'remediation': (
-                    f'La GPO "{name}" contient des paramètres non standards : '
-                    + ', '.join(problematic) + '.\n\n'
-                    f'📍 Bonne pratique : cette GPO doit servir UNIQUEMENT à : {purpose}\n\n'
-                    'Créer des GPO dédiées pour tout autre paramètre :\n'
-                    '  • GPO_Securite_Postes → paramètres de sécurité postes\n'
-                    '  • GPO_Audit → configuration de l\'audit\n'
-                    '  • GPO_Registre → paramètres de registre\n\n'
-                    'Modifier les GPO par défaut rend la gestion imprévisible et '
-                    'complique le dépannage lors d\'incidents.'
-                ),
+                'rule_id':        f'DEFAULT-GPO-{guid[:8]}',
+                'title':          f'GPO par défaut modifiée : {name}',
+                'severity':       'warning',
+                'ref':            'Bonne pratique AD · ANSSI R-AD · MS Best Practices',
+                'category':       'Gouvernance GPO',
+                'rec_value':      'Ne jamais modifier ces GPO — créer des GPO dédiées',
+                'migration_plan': list(merged_plan.values()),
                 'detail': (
-                    f'Contenu détecté hors usage normal : {", ".join(problematic)}. '
-                    f'Usage attendu de cette GPO : {purpose}.'
+                    f'Contenu détecté hors usage normal : {", ".join(problematic_labels)}. '
+                    f'Usage attendu : {purpose}.'
+                ),
+                'remediation': (
+                    f'La GPO "{name}" contient des paramètres non standards.\n'
+                    f'Usage attendu : {purpose} uniquement.\n\n'
+                    'Voir le plan de migration ci-dessous pour savoir quoi créer et où déplacer.'
                 ),
                 'not_configured': False,
-                'source_gpos': [{'name': gpo['name'], 'guid': gpo['guid']}],
+                'source_gpos':    [{'name': gpo['name'], 'guid': gpo['guid']}],
             })
         else:
-            # GPO par défaut non modifiée — c'est bien
             findings.append({
-                'rule_id':    f'DEFAULT-GPO-OK-{guid[:8]}',
-                'title':      f'{name} — non modifiée ✓',
-                'severity':   'good',
-                'ref':        'Bonne pratique AD · ANSSI R-AD',
-                'category':   'Gouvernance GPO',
-                'rec_value':  'Correct',
-                'remediation':'',
-                'detail':     f'La GPO par défaut "{name}" n\'a pas été modifiée — conforme aux bonnes pratiques.',
+                'rule_id':        f'DEFAULT-GPO-OK-{guid[:8]}',
+                'title':          f'{name} — non modifiée ✓',
+                'severity':       'good',
+                'ref':            'Bonne pratique AD · ANSSI R-AD',
+                'category':       'Gouvernance GPO',
+                'rec_value':      'Correct',
+                'migration_plan': [],
+                'remediation':    '',
+                'detail':         f'La GPO par défaut "{name}" n\'a pas été modifiée — conforme aux bonnes pratiques.',
                 'not_configured': False,
             })
 
@@ -5348,11 +5518,8 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
 .dl-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 
 /* ── Responsive ────────────────────────────────────── */
-@media(max-width:768px){
-  .sidebar{display:none}
-  .content-area{padding:16px}
-  .charts-row{grid-template-columns:1fr}
-}
+.migration-body.open{display:block !important}
+
 </style>
 </head>
 <body>
@@ -5484,28 +5651,132 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       {% if data.default_gpo_status %}
       <div style="margin-bottom:20px">
         <div class="section-title">🛡 GPO par défaut Windows</div>
-        <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;flex-direction:column;gap:10px">
           {% for f in data.default_gpo_status %}
+
           {% if f.severity == 'warning' %}
-          <div style="background:var(--amber-bg);border:1px solid rgba(212,137,42,.35);border-left:4px solid var(--amber);border-radius:8px;padding:14px 16px">
-            <div style="display:flex;align-items:flex-start;gap:12px">
-              <span style="font-size:18px;flex-shrink:0">⚠️</span>
-              <div style="flex:1;min-width:0">
-                <div style="font-size:14px;font-weight:600;color:var(--amber);margin-bottom:4px">{{ f.title }}</div>
-                <div style="font-size:12px;color:var(--txt2);margin-bottom:8px">{{ f.detail }}</div>
-                <div style="font-size:11px;color:var(--txt2);background:var(--surface2);border-radius:6px;padding:10px 12px;line-height:1.7;white-space:pre-wrap;font-family:'JetBrains Mono',monospace">{{ f.remediation }}</div>
+          <!-- GPO modifiée — afficher le plan de migration -->
+          <div style="background:var(--surface);border:1px solid rgba(212,137,42,.4);border-left:4px solid var(--amber);border-radius:8px;overflow:hidden">
+            <!-- En-tête -->
+            <div style="padding:14px 18px;background:var(--amber-bg);display:flex;align-items:center;gap:12px;cursor:pointer" onclick="this.nextElementSibling.classList.toggle('open')">
+              <span style="font-size:20px">⚠️</span>
+              <div style="flex:1">
+                <div style="font-size:15px;font-weight:700;color:var(--amber)">{{ f.title }}</div>
+                <div style="font-size:12px;color:var(--txt2);margin-top:2px">{{ f.detail }}</div>
+              </div>
+              <span style="font-size:12px;color:var(--amber);font-weight:600;flex-shrink:0">Voir le plan de migration ▼</span>
+            </div>
+
+            <!-- Plan de migration — masqué par défaut, ouvert au clic -->
+            <div style="display:none;padding:0" class="migration-body">
+
+              <!-- Intro -->
+              <div style="padding:16px 18px;border-bottom:1px solid var(--border);font-size:13px;color:var(--txt2);line-height:1.6;background:var(--surface2)">
+                <strong style="color:var(--txt)">Pourquoi c'est un problème ?</strong><br>
+                Les GPO par défaut sont difficiles à auditer, à documenter et à protéger.
+                Une modification involontaire ou malveillante y passe inaperçue.
+                La bonne pratique est de les laisser dans leur état d'origine et de créer des GPO dédiées pour chaque usage.
+              </div>
+
+              {% if f.migration_plan %}
+              <!-- Étapes de migration -->
+              <div style="padding:16px 18px;border-bottom:1px solid var(--border)">
+                <div style="font-size:13px;font-weight:700;color:var(--txt);margin-bottom:14px">
+                  📋 Plan de migration — {{ f.migration_plan|length }} GPO à créer
+                </div>
+
+                {% for step in f.migration_plan %}
+                <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:10px;overflow:hidden">
+                  <!-- En-tête de l'étape -->
+                  <div style="padding:12px 16px;background:var(--blue-bg);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
+                    <div style="width:24px;height:24px;border-radius:50%;background:var(--blue);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">{{ loop.index }}</div>
+                    <div style="flex:1">
+                      <div style="font-size:13px;font-weight:700;color:var(--blue);font-family:'JetBrains Mono',monospace">{{ step.gpo_name }}</div>
+                      <div style="font-size:11px;color:var(--txt2);margin-top:1px">{{ step.label }} — {{ step.count }} paramètre(s) à déplacer</div>
+                    </div>
+                  </div>
+                  <!-- Détails de l'étape -->
+                  <div style="padding:12px 16px">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
+                      <div>
+                        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--txt3);font-weight:600;margin-bottom:4px">📍 Emplacement dans la GPO</div>
+                        <div style="font-size:11px;color:var(--txt2);line-height:1.6;font-family:'JetBrains Mono',monospace;background:var(--surface);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">{{ step.scope }}</div>
+                      </div>
+                      <div>
+                        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--txt3);font-weight:600;margin-bottom:4px">🔗 Lier cette GPO à</div>
+                        <div style="font-size:11px;color:var(--txt2);line-height:1.6;font-family:'JetBrains Mono',monospace;background:var(--surface);padding:6px 10px;border-radius:4px;border:1px solid var(--border)">{{ step.ou_link }}</div>
+                      </div>
+                    </div>
+
+                    {% if step.items %}
+                    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--txt3);font-weight:600;margin-bottom:6px">Paramètres détectés à déplacer</div>
+                    <div style="display:flex;flex-direction:column;gap:3px">
+                      {% for item in step.params_list %}
+                      <div style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--txt2);padding:4px 10px;background:var(--surface);border-radius:3px;border:1px solid var(--border)">→ {{ item }}</div>
+                      {% endfor %}
+                      {% if step.extra_count is defined and step.extra_count > 0 %}
+                      <div style="font-size:11px;color:var(--txt3);padding:4px 10px;font-style:italic">… et {{ step.extra_count }} autre(s)</div>
+                      {% endif %}
+                    </div>
+                    {% endif %}
+                  </div>
+                </div>
+                {% endfor %}
+              </div>
+
+              <!-- Procédure de migration -->
+              <div style="padding:16px 18px;border-bottom:1px solid var(--border)">
+                <div style="font-size:13px;font-weight:700;color:var(--txt);margin-bottom:12px">🔧 Procédure étape par étape</div>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <div style="display:flex;gap:12px;align-items:flex-start">
+                    <div style="width:22px;height:22px;border-radius:50%;background:var(--green);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">1</div>
+                    <div style="font-size:12px;color:var(--txt2);line-height:1.6">Ouvrir la <strong>console GPMC</strong> (Group Policy Management Console) sur le DC ou une machine admin</div>
+                  </div>
+                  <div style="display:flex;gap:12px;align-items:flex-start">
+                    <div style="width:22px;height:22px;border-radius:50%;background:var(--green);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">2</div>
+                    <div style="font-size:12px;color:var(--txt2);line-height:1.6">Pour chaque GPO du plan ci-dessus : <strong>créer une nouvelle GPO</strong> (clic droit sur le domaine ou l'OU → "Créer un objet de stratégie de groupe")</div>
+                  </div>
+                  <div style="display:flex;gap:12px;align-items:flex-start">
+                    <div style="width:22px;height:22px;border-radius:50%;background:var(--green);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">3</div>
+                    <div style="font-size:12px;color:var(--txt2);line-height:1.6"><strong>Reconfigurer les paramètres</strong> dans la nouvelle GPO (mêmes valeurs que dans la GPO par défaut)</div>
+                  </div>
+                  <div style="display:flex;gap:12px;align-items:flex-start">
+                    <div style="width:22px;height:22px;border-radius:50%;background:var(--green);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">4</div>
+                    <div style="font-size:12px;color:var(--txt2);line-height:1.6"><strong>Lier la nouvelle GPO</strong> à l'OU ou au domaine indiqué, vérifier qu'elle s'applique correctement (<code>gpresult /r</code> sur un poste test)</div>
+                  </div>
+                  <div style="display:flex;gap:12px;align-items:flex-start">
+                    <div style="width:22px;height:22px;border-radius:50%;background:var(--amber);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">5</div>
+                    <div style="font-size:12px;color:var(--txt2);line-height:1.6"><strong>Supprimer les paramètres de la GPO par défaut</strong> uniquement après validation que la nouvelle GPO fonctionne</div>
+                  </div>
+                  <div style="display:flex;gap:12px;align-items:flex-start">
+                    <div style="width:22px;height:22px;border-radius:50%;background:var(--red);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px">⚠</div>
+                    <div style="font-size:12px;color:var(--amber);line-height:1.6"><strong>Ne jamais supprimer</strong> la GPO par défaut elle-même — seulement vider les paramètres ajoutés par erreur</div>
+                  </div>
+                </div>
+              </div>
+
+              {% endif %}
+
+              <!-- Rappel usage normal -->
+              <div style="padding:14px 18px;background:var(--surface2)">
+                <div style="font-size:12px;color:var(--txt2)">
+                  <strong style="color:var(--txt)">Usage normal de cette GPO :</strong> {{ f.get('remediation_short', '') }}
+                </div>
               </div>
             </div>
           </div>
+
           {% else %}
-          <div style="background:var(--green-bg);border:1px solid rgba(58,158,114,.25);border-left:4px solid var(--green);border-radius:8px;padding:12px 16px;display:flex;align-items:center;gap:10px">
-            <span style="font-size:16px">✅</span>
+          <!-- GPO non modifiée -->
+          <div style="background:var(--green-bg);border:1px solid rgba(58,158,114,.25);border-left:4px solid var(--green);border-radius:8px;padding:12px 18px;display:flex;align-items:center;gap:12px">
+            <span style="font-size:18px">✅</span>
             <div>
-              <div style="font-size:13px;font-weight:500;color:var(--green)">{{ f.title }}</div>
+              <div style="font-size:13px;font-weight:600;color:var(--green)">{{ f.title }}</div>
               <div style="font-size:11px;color:var(--txt2);margin-top:2px">{{ f.detail }}</div>
             </div>
           </div>
           {% endif %}
+
           {% endfor %}
         </div>
       </div>
