@@ -4510,8 +4510,9 @@ def detect_catchall_gpos(gpos: list) -> list:
         'Droits utilisateurs':        [('settings','privilege_rights')],
         'Options de sécurité':        [('settings','system_access'),('settings','registry_values')],
         'Kerberos':                   [('settings','kerberos_policy')],
-        'Paramètres ADMX':            [('gpo','registry_entries')],
+        'Paramètres ADMX':            [('gpo','registry_entries'), ('gpo','registry_admx'), ('gpo','registry_admx_user')],
         'Préférences registre':       [('gpo','registry_xml_machine'),('gpo','registry_xml_user')],
+        'Copie de fichiers':          [('gpo','files_machine'),('gpo','files_user')],
         'Scripts':                    [('gpo','scripts')],
         'Imprimantes':                [('gpo','printers'),('gpo','printers_user')],
         'Lecteurs réseau':            [('gpo','drives'),('gpo','drives_user')],
@@ -4577,12 +4578,22 @@ def detect_catchall_gpos(gpos: list) -> list:
         total_params = 0
         total_params += len(gpo.get('registry_entries', []))
         total_params += len(gpo.get('registry_entries_user', []))
+        total_params += len(gpo.get('registry_admx', []))        # clés ADMX décodées machine
+        total_params += len(gpo.get('registry_admx_user', []))   # clés ADMX décodées user
         total_params += len(gpo.get('registry_xml_machine', []))
         total_params += len(gpo.get('registry_xml_user', []))
         total_params += len(gpo.get('printers', []))
+        total_params += len(gpo.get('printers_user', []))
         total_params += len(gpo.get('drives', []))
+        total_params += len(gpo.get('drives_user', []))
         total_params += len(gpo.get('scheduled_tasks', []))
         total_params += len(gpo.get('groups', []))
+        total_params += len(gpo.get('services', []))
+        total_params += len(gpo.get('files_machine', []))
+        total_params += len(gpo.get('files_user', []))
+        total_params += len(gpo.get('software_machine', []))
+        total_params += len(gpo.get('software_user', []))
+        total_params += len(gpo.get('network_shares', []))
         total_params += sum(
             len(lst) for lst in (gpo.get('scripts') or {}).values()
             if isinstance(lst, list)
@@ -4595,8 +4606,10 @@ def detect_catchall_gpos(gpos: list) -> list:
         scripts = gpo.get('scripts') or {}
         has_computer = any([
             bool(gpo.get('registry_entries')),
+            bool(gpo.get('registry_admx')),      # ADMX décodés machine
             bool(gpo.get('printers')),
             bool(gpo.get('registry_xml_machine')),
+            bool(gpo.get('files_machine')),
             bool(settings.get('password_policy')),
             bool(settings.get('event_audit')),
             bool(settings.get('privilege_rights')),
@@ -4606,6 +4619,8 @@ def detect_catchall_gpos(gpos: list) -> list:
             bool(gpo.get('drives')),
             bool(gpo.get('printers_user')),
             bool(gpo.get('registry_xml_user')),
+            bool(gpo.get('registry_admx_user')),  # ADMX décodés user
+            bool(gpo.get('files_user')),
             bool(gpo.get('internet_settings')),
             any(isinstance(v,dict) and v.get('cmd') for v in scripts.get('logon',[]) + scripts.get('logoff',[])),
         ])
