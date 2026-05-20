@@ -4469,6 +4469,80 @@ def check_default_gpo_modifications(gpos: list) -> list:
 
     return findings
 
+def detect_catchall_gpos(gpos: list) -> list:
+    """Détecte les GPO qui couvrent trop de domaines différents (fourre-tout)."""
+    CATEGORIES = {
+        'Mots de passe / Verrouillage': [('settings','password_policy'),('settings','system_access')],
+        'Audit':                         [('settings','event_audit'),('gpo','audit_csv')],
+        'Droits utilisateurs':           [('settings','privilege_rights')],
+        'Kerberos':                      [('settings','kerberos_policy')],
+        'Options de sécurité':           [('settings','registry_values')],
+        'Paramètres ADMX':               [('gpo','registry_entries')],
+        'Préférences registre':          [('gpo','registry_xml_machine'),('gpo','registry_xml_user')],
+        'Scripts':                       [('gpo','scripts')],
+        'Imprimantes':                   [('gpo','printers'),('gpo','printers_user')],
+        'Lecteurs réseau':               [('gpo','drives'),('gpo','drives_user')],
+        'Tâches planifiées':             [('gpo','scheduled_tasks')],
+        'Groupes locaux':                [('gpo','groups')],
+        'Services':                      [('gpo','services')],
+        'Logiciels':                     [('gpo','software_machine'),('gpo','software_user')],
+        'Partages réseau':               [('gpo','network_shares')],
+        'Dossiers':                      [('gpo','folders_machine'),('gpo','folders_user')],
+        'Sources ODBC':                  [('gpo','datasources_machine'),('gpo','datasources_user')],
+        'Proxy / Internet':              [('gpo','internet_settings')],
+        'VPN / Réseau':                  [('gpo','network_options')],
+        'Fichiers INI':                  [('gpo','ini_files_machine'),('gpo','ini_files_user')],
+    }
+    CATCHALL_THRESHOLD = 4
+    DEFAULT_GUIDS = {'{31B2F340-016D-11D2-945F-00C04FB984F9}',
+                     '{6AC1786C-016F-11D2-945F-00C04FB984F9}'}
+    findings = []
+
+    for gpo in gpos:
+        if gpo.get('guid', '').upper() in DEFAULT_GUIDS:
+            continue
+        if not gpo.get('links'):
+            continue  # GPO orpheline — déjà signalée ailleurs
+        settings = gpo.get('settings', {})
+        present = []
+        for cat_name, sources in CATEGORIES.items():
+            for (src_type, key) in sources:
+                content = gpo.get(key) if src_type == 'gpo' else settings.get(key)
+                if content:
+                    if isinstance(content, list) and len(content) > 0:
+                        present.append(cat_name); break
+                    elif isinstance(content, dict) and any(v for v in content.values() if v):
+                        present.append(cat_name); break
+        if len(present) >= CATCHALL_THRESHOLD:
+            SUGGESTIONS_MAP = {
+                'Mots de passe / Verrouillage': 'O-Securite-MotsDePasse → politique de mots de passe',
+                'Audit':                         'O-Audit-Evenements → configuration de l\'audit',
+                'Scripts':                       'O-Scripts-Demarrage → scripts de démarrage/logon',
+                'Imprimantes':                   'O-Imprimantes → déploiement d\'imprimantes',
+                'Préférences registre':          'O-Securite-Registre → paramètres de registre',
+                'Logiciels':                     'O-Logiciels → installation de logiciels',
+                'Tâches planifiées':             'O-Taches-Planifiees → tâches planifiées',
+                'Droits utilisateurs':           'O-Droits-Utilisateurs → attribution des droits',
+                'Lecteurs réseau':               'U-Lecteurs-Reseau → lecteurs réseau mappés',
+                'Groupes locaux':                'O-Groupes-Locaux → groupes locaux',
+                'Services':                      'O-Services-Windows → services Windows',
+                'Partages réseau':               'O-Partages-Reseau → partages réseau',
+                'VPN / Réseau':                  'U-VPN-Connexions → options réseau/VPN',
+                'Kerberos':                      'DDP → stratégie Kerberos (Default Domain Policy)',
+                'Options de sécurité':           'O-Securite-Options → options de sécurité',
+            }
+            suggestions = [SUGGESTIONS_MAP[c] for c in present if c in SUGGESTIONS_MAP]
+            findings.append({
+                'gpo_name':    gpo['name'],
+                'gpo_guid':    gpo['guid'],
+                'categories':  present,
+                'cat_count':   len(present),
+                'suggestions': suggestions,
+                'links':       gpo.get('links', []),
+            })
+    return findings
+
+
 def analyze_gpos(gpos: list) -> dict:
     if not gpos:
         print("[!] Aucune GPO collectée — vérifiez la connexion LDAP et les droits du compte.")
@@ -4508,10 +4582,113 @@ def analyze_gpos(gpos: list) -> dict:
     rsop_privrights = rsop_settings.get('privilege_rights', {})
     global_findings += evaluate_privright_rules(rsop_privrights)
 
-    # ── Vérification des GPO par défaut ──────────────────────────────────────
-    # Détecter si Default Domain Policy / Default Domain Controllers Policy
-    # ont été modifiées au-delà de leur usage normal
+    # ── Enrichissement des findings "absent" — portée limitée ────────────────
+    # Si un paramètre est absent du RSOP global mais existe dans une GPO
+    # à portée limitée (WMI, Security Filtering, OU spécifique), le signaler.
+
+    for finding in global_findings:
+        if not finding.get('not_configured'):
+            continue  # seulement les "absent"
+
+        rule_id   = finding['rule_id']
+        rule      = next((r for r in AUDIT_RULES if r['id'] == rule_id), None)
+        if not rule:
+            continue
+
+        check_key = (rule.get('check_key') or '').lower()
+        section   = rule.get('section', '')
+        reg_key   = (rule.get('reg_key') or '').lower()
+        reg_val   = (rule.get('reg_value') or '').lower()
+
+        # Chercher dans toutes les GPO individuelles si ce paramètre est configuré
+        partial_gpos = []
+        for gpo in gpos:
+            if is_gpo_fully_disabled(gpo):
+                continue
+
+            found_in_gpo = False
+            gpo_settings = gpo.get('settings', {})
+            gpo_registry = gpo.get('registry_entries', [])
+
+            if section == 'registry':
+                for (k, v, t, val) in gpo_registry:
+                    if k.lower() == reg_key and v.lower() == reg_val:
+                        found_in_gpo = True
+                        break
+            elif section and check_key:
+                sec = gpo_settings.get(section, {})
+                if sec and check_key in sec:
+                    found_in_gpo = True
+                else:
+                    # Vérifier registry_values alias
+                    REGVAL_ALIASES = {
+                        ('lmcompatibilitylevel', 'system_access'):
+                            'machine\\system\\currentcontrolset\\control\\lsa\\lmcompatibilitylevel',
+                        ('nolmhash', 'system_access'):
+                            'machine\\system\\currentcontrolset\\control\\lsa\\nolmhash',
+                        ('restrictanonymous', 'system_access'):
+                            'machine\\system\\currentcontrolset\\control\\lsa\\restrictanonymous',
+                        ('enableguestaccount', 'system_access'):
+                            'machine\\software\\microsoft\\windows nt\\currentversion\\winlogon\\enableguestaccount',
+                    }
+                    alias = REGVAL_ALIASES.get((check_key, section))
+                    if alias and gpo_settings.get('registry_values', {}).get(alias):
+                        found_in_gpo = True
+
+            if found_in_gpo:
+                links = gpo.get('links', [])
+                wmi   = gpo.get('wmi_filter')
+                sf    = gpo.get('security_filter', [])
+                # Déterminer si la portée est limitée
+                is_limited = bool(wmi or sf)
+                if not is_limited:
+                    # Vérifier si lié uniquement à des OU enfants (pas au domaine racine)
+                    domain_link = any(
+                        not l.get('ou', '').upper().startswith('OU=')
+                        for l in links
+                    )
+                    is_limited = not domain_link and len(links) > 0
+
+                partial_gpos.append({
+                    'name':       gpo['name'],
+                    'guid':       gpo['guid'],
+                    'limited':    is_limited,
+                    'wmi':        wmi.get('name', '') if wmi else '',
+                    'sf':         sf[:3] if sf else [],
+                    'ous':        [l.get('ou', '') for l in links[:3]],
+                })
+
+        if partial_gpos:
+            limited = [g for g in partial_gpos if g['limited']]
+            full    = [g for g in partial_gpos if not g['limited']]
+            if full:
+                # Paramètre configuré dans une GPO à portée complète
+                # → le finding "absent" est probablement un faux positif
+                finding['scope_note'] = (
+                    f"ℹ Ce paramètre est configuré dans "
+                    f"{', '.join(g['name'] for g in full[:2])} "
+                    f"mais n'a pas été détecté dans le RSOP global — "
+                    f"vérifier que cette GPO s'applique bien à toutes les machines."
+                )
+            elif limited:
+                # Paramètre configuré mais seulement dans des GPO à portée limitée
+                details = []
+                for g in limited[:3]:
+                    info_parts = []
+                    if g['wmi']:
+                        info_parts.append(f"filtre WMI : {g['wmi']}")
+                    if g['sf']:
+                        info_parts.append(f"filtrage sécurité : {', '.join(str(s) for s in g['sf'][:2])}")
+                    if g['ous']:
+                        info_parts.append(f"OU : {g['ous'][0].split(',')[0]}")
+                    details.append(f"{g['name']} ({' | '.join(info_parts)})")
+                finding['scope_note'] = (
+                    f"⚠ Paramètre configuré mais portée limitée — "
+                    f"ne s'applique pas à toutes les machines : "
+                    + ' ; '.join(details)
+                )
     default_gpo_findings = check_default_gpo_modifications(gpos)
+    catchall_gpos        = detect_catchall_gpos(gpos)
     for f in default_gpo_findings:
         if f['severity'] == 'warning':
             global_findings.append(f)
@@ -4951,10 +5128,11 @@ def analyze_gpos(gpos: list) -> dict:
         'gpo_content_index': gpo_content_index,
         'all_findings':      global_findings,
         'generated_at':      datetime.now().strftime('%d/%m/%Y %H:%M'),
-        'gpo_count':         len(gpos),
-        'wmi_count':         sum(1 for g in gpos if g.get('wmi_filter')),
+        'gpo_count':          len(gpos),
+        'wmi_count':          sum(1 for g in gpos if g.get('wmi_filter')),
         'default_gpo_status': [f for f in default_gpo_findings],
-        'search_index':      build_search_index(_enrich_gpos_for_search(gpos, gpo_reports)),
+        'catchall_gpos':      catchall_gpos,
+        'search_index':       build_search_index(_enrich_gpos_for_search(gpos, gpo_reports)),
     }
 
 
@@ -5789,6 +5967,56 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
 
       <!-- Score par catégorie style PingCastle -->
       <div style="margin-bottom:24px">
+
+      <!-- GPO fourre-tout -->
+      {% if data.catchall_gpos %}
+      <div style="margin-bottom:20px">
+        <div class="section-title">🗂 GPO fourre-tout détectées
+          <span class="st-count">{{ data.catchall_gpos|length }}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          {% for g in data.catchall_gpos %}
+          <div style="background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--amber);border-radius:8px;overflow:hidden">
+            <div style="padding:12px 16px;display:flex;align-items:center;gap:12px;cursor:pointer" onclick="this.nextElementSibling.classList.toggle('open')">
+              <span style="font-size:16px">📦</span>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:13px;font-weight:600;color:var(--txt)" onclick="event.stopPropagation();openGPODetail('{{ g.gpo_guid }}')">{{ g.gpo_name }}</div>
+                <div style="font-size:11px;color:var(--txt3);margin-top:2px">
+                  {{ g.cat_count }} catégories mélangées :
+                  {% for cat in g.categories %}<span style="display:inline-block;margin:1px 3px 1px 0;padding:1px 7px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;font-size:10px;color:var(--txt2)">{{ cat }}</span>{% endfor %}
+                </div>
+              </div>
+              <span style="font-size:11px;color:var(--amber);flex-shrink:0">Voir suggestions ▼</span>
+            </div>
+            <div style="display:none;padding:14px 16px;border-top:1px solid var(--border);background:var(--surface2)" class="migration-body">
+              <div style="font-size:12px;color:var(--txt2);margin-bottom:12px;line-height:1.6">
+                <strong style="color:var(--txt)">Pourquoi c'est un problème ?</strong><br>
+                Une GPO avec trop de rôles différents est difficile à documenter, auditer et dépanner.
+                Si un paramètre cause un problème, difficile de savoir quelle GPO est en cause.
+                La bonne pratique est <strong>une GPO = un rôle</strong>.
+              </div>
+              {% if g.suggestions %}
+              <div style="font-size:12px;font-weight:600;color:var(--txt);margin-bottom:8px">💡 Découpage suggéré :</div>
+              <div style="display:flex;flex-direction:column;gap:5px">
+                {% for s in g.suggestions %}
+                <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--surface);border:1px solid var(--border);border-radius:5px">
+                  <span style="color:var(--blue);font-size:12px">→</span>
+                  <span style="font-size:12px;font-family:'JetBrains Mono',monospace;color:var(--txt2)">{{ s }}</span>
+                </div>
+                {% endfor %}
+              </div>
+              {% endif %}
+              {% if g.links %}
+              <div style="margin-top:10px;font-size:11px;color:var(--txt3)">
+                Liée à : {% for l in g.links[:3] %}<span style="color:var(--txt2)">{{ l.ou }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
+              </div>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
         <div class="section-title">📊 Score de risque par domaine
           <span class="st-count" style="font-size:11px;color:var(--txt3);font-weight:400">0 = sûr · 100 = risque maximal · le pire détermine le score global</span>
         </div>
@@ -5939,6 +6167,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
             {% if f.get('rec_value') %}<div style="font-size:11px;color:var(--blue);padding:4px 10px;background:var(--blue-bg);border-radius:4px;margin-bottom:6px">🎯 Valeur recommandée : <strong>{{ f.rec_value }}</strong></div>{% endif %}
             <div class="fc-reco">✅ {{ f.remediation }}</div>
             {% if f.get('default_gpo_note') %}<div style="margin-top:6px;font-size:11px;padding:8px 12px;background:rgba(212,137,42,.08);border:1px solid rgba(212,137,42,.3);border-radius:4px;color:var(--amber);line-height:1.5">{{ f.default_gpo_note }}</div>{% endif %}
+            {% if f.get('scope_note') %}<div style="margin-top:6px;font-size:11px;padding:8px 12px;background:var(--blue-bg);border:1px solid rgba(74,127,212,.2);border-radius:4px;color:var(--blue);line-height:1.5">{{ f.scope_note }}</div>{% endif %}
             {% if f.get('pso_note') %}<div style="margin-top:6px;font-size:11px;padding:6px 10px;background:var(--amber-bg);border-radius:4px;color:var(--amber)">⚠ {{ f.pso_note }}</div>{% endif %}
             {% if f.source_gpos %}<div class="fc-sources">GPO source : {% for sg in f.source_gpos %}<span class="fc-gpo-link" onclick="openGPODetail('{{ sg.guid }}')">{{ sg.name }}</span>{% endfor %}</div>{% endif %}
             {% if f.action_label %}<div style="margin-top:6px;font-size:11px;padding:4px 8px;background:var(--surface2);border-radius:3px;color:var(--txt2)">🔧 {{ f.action_label }}</div>{% endif %}
