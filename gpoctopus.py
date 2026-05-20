@@ -5686,6 +5686,8 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
 .search-mini input:focus{border-color:var(--blue)}
 .search-mini .si{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--txt3);font-size:13px;pointer-events:none}
 
+.sort-btn{padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--txt2);cursor:pointer;font-size:11px}
+.sort-btn.active{background:var(--blue)!important;color:#fff!important;border-color:var(--blue)!important}
 .filter-btn{
   padding:5px 12px;border-radius:6px;border:1px solid var(--border);
   background:none;cursor:pointer;font-size:11px;color:var(--txt2);
@@ -6389,6 +6391,13 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
         <button class="filter-btn" onclick="filtGPO('issues',this)">Avec problèmes</button>
         <button class="filter-btn" onclick="filtGPO('wmi',this)">Filtre WMI</button>
         <button class="filter-btn" onclick="filtGPO('orphan',this)">Orphelines</button>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:4px;font-size:11px;color:var(--txt3)">
+          Trier :
+          <button class="sort-btn" data-sort="score"    onclick="setGPOSort('score')"      style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--txt2);cursor:pointer;font-size:11px">Score ▼</button>
+          <button class="sort-btn active" data-sort="alpha" onclick="setGPOSort('alpha')"  style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--txt2);cursor:pointer;font-size:11px">A → Z</button>
+          <button class="sort-btn" data-sort="alpha-desc" onclick="setGPOSort('alpha-desc')" style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--txt2);cursor:pointer;font-size:11px">Z → A</button>
+          <button class="sort-btn" data-sort="date"    onclick="setGPOSort('date')"        style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--txt2);cursor:pointer;font-size:11px">Date ▼</button>
+        </div>
       </div>
       <div class="gpo-grid" id="gpo-list-area"></div>
     </div>
@@ -6868,7 +6877,7 @@ function _renderResultRows(items,allToks,guid){
 // ══════════════════════════════════════════════════════════════════════
 // GPO LISTE
 // ══════════════════════════════════════════════════════════════════════
-let _gpoFilter='all', _gpoSearch='';
+let _gpoFilter='all', _gpoSearch='', _gpoSort='alpha';
 
 function filtGPO(f,btn){
   _gpoFilter=f;
@@ -6878,13 +6887,26 @@ function filtGPO(f,btn){
 }
 function searchGPOList(q){ _gpoSearch=q.toLowerCase(); renderGPOList(_gpos); }
 
+function setGPOSort(s){
+  _gpoSort=s;
+  document.querySelectorAll('.sort-btn').forEach(b=>b.classList.toggle('active',b.dataset.sort===s));
+  renderGPOList(_gpos);
+}
+
 function renderGPOList(gpos){
   let g=[...gpos];
   if(_gpoSearch) g=g.filter(x=>x.name.toLowerCase().includes(_gpoSearch));
   if(_gpoFilter==='issues') g=g.filter(x=>x.findings?.length>0);
   if(_gpoFilter==='wmi') g=g.filter(x=>x.wmi_filter);
   if(_gpoFilter==='orphan') g=g.filter(x=>x.is_orphan);
-  g.sort((a,b)=>(a.score||100)-(b.score||100));
+  if(_gpoSort==='alpha')
+    g.sort((a,b)=>a.name.localeCompare(b.name,'fr',{sensitivity:'base'}));
+  else if(_gpoSort==='alpha-desc')
+    g.sort((a,b)=>b.name.localeCompare(a.name,'fr',{sensitivity:'base'}));
+  else if(_gpoSort==='date')
+    g.sort((a,b)=>(b.changed||'').localeCompare(a.changed||''));
+  else
+    g.sort((a,b)=>(a.score||100)-(b.score||100));
 
   const area=document.getElementById('gpo-list-area');
   if(!area) return;
