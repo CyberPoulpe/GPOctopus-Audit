@@ -4493,48 +4493,76 @@ def detect_catchall_gpos(gpos: list) -> list:
         'VPN / Réseau':                  [('gpo','network_options')],
         'Fichiers INI':                  [('gpo','ini_files_machine'),('gpo','ini_files_user')],
     }
-    CATCHALL_THRESHOLD = 2  # dès 2 catégories différentes = potentiellement à découper
+    CATCHALL_THRESHOLD = 3  # 3 catégories fonctionnelles distinctes = fourre-tout
     DEFAULT_GUIDS = {'{31B2F340-016D-11D2-945F-00C04FB984F9}',
                      '{6AC1786C-016F-11D2-945F-00C04FB984F9}'}
     findings = []
+
+    # Catégories fonctionnelles — ce qui compte c'est le TYPE de paramètre, pas la technique
+    FUNC_CATEGORIES = {
+        # Stratégies de sécurité (GptTmpl.inf)
+        'Politique de mots de passe':     [('settings','password_policy')],
+        'Audit des événements':           [('settings','event_audit')],
+        'Droits utilisateurs':            [('settings','privilege_rights')],
+        'Options de sécurité':            [('settings','system_access'),('settings','registry_values')],
+        'Kerberos':                       [('settings','kerberos_policy')],
+        # Modèles d'administration (ADMX via Registry.pol)
+        'Paramètres ADMX/Stratégies':     [('gpo','registry_entries')],
+        # Préférences GPO (XML)
+        'Préférences registre':           [('gpo','registry_xml_machine'),('gpo','registry_xml_user')],
+        'Scripts':                        [('gpo','scripts')],
+        'Imprimantes':                    [('gpo','printers'),('gpo','printers_user')],
+        'Lecteurs réseau':                [('gpo','drives'),('gpo','drives_user')],
+        'Tâches planifiées':              [('gpo','scheduled_tasks')],
+        'Groupes locaux':                 [('gpo','groups')],
+        'Services':                       [('gpo','services')],
+        'Logiciels':                      [('gpo','software_machine'),('gpo','software_user')],
+        'Partages réseau':                [('gpo','network_shares')],
+        'Dossiers':                       [('gpo','folders_machine'),('gpo','folders_user')],
+        'Options réseau / VPN':           [('gpo','network_options')],
+        'Internet / Proxy':               [('gpo','internet_settings')],
+    }
 
     for gpo in gpos:
         if gpo.get('guid', '').upper() in DEFAULT_GUIDS:
             continue
         if not gpo.get('links'):
-            continue  # GPO orpheline — déjà signalée ailleurs
+            continue
         settings = gpo.get('settings', {})
+
         present = []
-        for cat_name, sources in CATEGORIES.items():
+        for cat_name, sources in FUNC_CATEGORIES.items():
             for (src_type, key) in sources:
                 content = gpo.get(key) if src_type == 'gpo' else settings.get(key)
-                if content:
-                    if isinstance(content, list) and len(content) > 0:
-                        present.append(cat_name); break
-                    elif isinstance(content, dict) and any(v for v in content.values() if v):
-                        present.append(cat_name); break
+                if not content:
+                    continue
+                # Vérifier que le contenu est non-vide
+                if isinstance(content, list) and len(content) > 0:
+                    present.append(cat_name); break
+                elif isinstance(content, dict) and any(v for v in content.values() if v):
+                    present.append(cat_name); break
 
-        # Détecter aussi les GPO qui configurent à la fois ordinateur ET utilisateur
-        has_computer = any([
+        # Détecter si la GPO configure à la fois ordinateur ET utilisateur
+        # C'est un signe fort de GPO fourre-tout
+        has_computer_pref = any([
             bool(gpo.get('registry_entries')),
-            bool(gpo.get('scripts', {}).get('startup') or gpo.get('scripts', {}).get('shutdown')),
             bool(gpo.get('printers')),
+            bool(gpo.get('registry_xml_machine')),
             bool(settings.get('password_policy')),
             bool(settings.get('event_audit')),
             bool(settings.get('privilege_rights')),
         ])
-        has_user = any([
+        has_user_pref = any([
             bool(gpo.get('drives')),
             bool(gpo.get('printers_user')),
-            bool(gpo.get('drives_user')),
-            bool(gpo.get('scripts', {}).get('logon') or gpo.get('scripts', {}).get('logoff')),
             bool(gpo.get('registry_xml_user')),
             bool(gpo.get('internet_settings')),
             bool(gpo.get('network_options')),
             bool(gpo.get('regional')),
         ])
-        if has_computer and has_user and 'Ordinateur + Utilisateur' not in present:
-            present.append('Ordinateur + Utilisateur (à séparer)')
+        if has_computer_pref and has_user_pref:
+            if 'Config. ordinateur + utilisateur' not in present:
+                present.append('Config. ordinateur + utilisateur')
 
         if len(present) >= CATCHALL_THRESHOLD:
             SUGGESTIONS_MAP = {
@@ -6912,7 +6940,7 @@ const ATTACK_EXAMPLES={
 };
 
 function renderGPODetail(guid, container){
-  const target = container || document.getElementById('gpo-detail-body') || document.getElementById('gpo-overlay-body');
+  const target = container || document.getElementById('gpo-overlay-body');
   if(!target) return;
   const g=_gpos.find(x=>x.guid===guid);
   if(!g) return;
@@ -6922,30 +6950,34 @@ function renderGPODetail(guid, container){
   const sc=g.score??100;
   const scColor=sc>=70?'var(--green)':sc>=40?'var(--amber)':'var(--red)';
 
-  // Header
-  const hdr=document.getElementById('gpo-detail-header');
-  hdr.innerHTML=`
-    <h2>${_escHtml(g.name)}</h2>
-    <div class="gpo-detail-meta">
-      <div class="gdm-item"><span class="gdm-l">GUID</span><span class="gdm-v" style="font-size:10px">${g.guid}</span></div>
-      <div class="gdm-item"><span class="gdm-l">Modifié</span><span class="gdm-v">${g.changed?g.changed.slice(0,10):'—'}</span></div>
-      <div class="gdm-item"><span class="gdm-l">Créé</span><span class="gdm-v">${g.created?g.created.slice(0,10):'—'}</span></div>
-      ${sc!==null?`<div class="gdm-item"><span class="gdm-l">Score</span><span class="gdm-v" style="color:${scColor};font-weight:700">${sc}/100</span></div>`:''}
-      ${flagLabel?`<div class="gdm-item"><span class="gdm-l">Statut</span><span class="gdm-v" style="color:var(--amber)">${flagLabel}</span></div>`:''}
-      ${g.is_orphan?`<div class="gdm-item"><span class="gdm-l">Liens</span><span class="gdm-v" style="color:var(--blue)">Orpheline</span></div>`:''}
-    </div>
-    ${g.wmi_filter?`<div class="wmi-alert" style="margin:12px 0 0">
-      <div class="wmi-alert-title">⚙ Filtre WMI actif — ne s'applique pas sur toutes les machines</div>
-      <div style="font-size:11px;color:var(--txt2)"><strong>Nom :</strong> ${_escHtml(g.wmi_filter.name||'')}${g.wmi_filter.description?` — ${_escHtml(g.wmi_filter.description)}`:''}</div>
-      <div class="wmi-query">${_escHtml(g.wmi_filter.query||'')}</div>
-      <div style="font-size:10px;color:var(--amber);margin-top:4px">Si la GPO ne s'applique pas sur un poste, testez : <code>Get-WmiObject -Query "..."</code></div>
-    </div>`:''}
-    ${g.security_filter&&g.security_filter.length>0?`<div style="margin:10px 0 0;padding:10px 14px;background:var(--blue-bg);border:1px solid rgba(74,127,212,.25);border-radius:6px">
-      <div style="font-size:12px;font-weight:600;color:var(--blue);margin-bottom:5px">🔒 Security Filtering — s'applique uniquement à :</div>
-      <div style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--txt2)">${g.security_filter.map(s=>_escHtml(s)).join('<br>')}</div>
-    </div>`:''}`;
+  // Header injecté dans le titre de l'overlay (si disponible)
+  const hdrEl = document.getElementById('gpo-overlay-title');
+  if(hdrEl) hdrEl.textContent = g.name;
+  const metaEl = document.getElementById('gpo-overlay-meta');
+  if(metaEl) metaEl.innerHTML = [
+    g.guid,
+    g.changed ? '📅 ' + g.changed.slice(0,10) : '',
+    flagLabel ? '<span style="color:var(--amber)">⊘ '+flagLabel+'</span>' : '',
+    g.wmi_filter ? '<span style="color:var(--blue)">⚙ WMI : '+_escHtml(g.wmi_filter.name||'')+'</span>' : '',
+  ].filter(Boolean).join(' · ');
 
   let body='';
+
+  // WMI + Security Filtering affichés dans le corps
+  if(g.wmi_filter){
+    body+=`<div class="wmi-alert" style="margin-bottom:16px">
+      <div class="wmi-alert-title">⚙ Filtre WMI actif — ne s'applique pas sur toutes les machines</div>
+      <div style="font-size:11px;color:var(--txt2)"><strong>Nom :</strong> ${_escHtml(g.wmi_filter.name||'')}${g.wmi_filter.description?' — '+_escHtml(g.wmi_filter.description):''}</div>
+      <div class="wmi-query">${_escHtml(g.wmi_filter.query||'')}</div>
+      <div style="font-size:10px;color:var(--amber);margin-top:4px">Si la GPO ne s'applique pas sur un poste : <code>Get-WmiObject -Query "..."</code></div>
+    </div>`;
+  }
+  if(g.security_filter&&g.security_filter.length>0){
+    body+=`<div style="margin-bottom:16px;padding:10px 14px;background:var(--blue-bg);border:1px solid rgba(74,127,212,.25);border-radius:6px">
+      <div style="font-size:12px;font-weight:600;color:var(--blue);margin-bottom:5px">🔒 Security Filtering — s'applique uniquement à :</div>
+      <div style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--txt2)">${g.security_filter.map(s=>_escHtml(s)).join('<br>')}</div>
+    </div>`;
+  }
 
   // Findings de cette GPO
   if(g.findings?.length){
