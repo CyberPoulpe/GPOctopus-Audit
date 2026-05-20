@@ -5541,9 +5541,17 @@ def analyze_gpos(gpos: list) -> dict:
         risk_level = 'Faible'
         risk_color = 'green'
 
-    criticals = sum(1 for f in global_findings if f['severity'] == 'critical')
-    warnings  = sum(1 for f in global_findings if f['severity'] == 'warning')
-    infos     = sum(1 for f in global_findings if f['severity'] == 'info')
+    # Séparer findings confirmés (vraie mauvaise valeur) vs non couverts (absent des GPO)
+    confirmed_findings  = [f for f in global_findings if not f.get('not_configured')]
+    uncovered_findings  = [f for f in global_findings if f.get('not_configured')]
+
+    criticals = sum(1 for f in confirmed_findings if f['severity'] == 'critical')
+    warnings  = sum(1 for f in confirmed_findings if f['severity'] == 'warning')
+    infos     = sum(1 for f in confirmed_findings if f['severity'] == 'info')
+    # Recommandations = paramètres importants absents des GPO (non couverts)
+    reco_critical = sum(1 for f in uncovered_findings if f['severity'] == 'critical')
+    reco_warning  = sum(1 for f in uncovered_findings if f['severity'] == 'warning')
+    reco_info     = sum(1 for f in uncovered_findings if f['severity'] == 'info')
     # Pénalités additionnelles (orphelines, conflits) — max +10 pts
     orphan_penalty   = min(len(orphan_gpos) * 1, 5)
     conflict_penalty = min(conflicts_high * 2 + conflicts_low, 5)
@@ -5555,9 +5563,14 @@ def analyze_gpos(gpos: list) -> dict:
         'risk_color':      risk_color,
         'category_scores': category_scores,
         'total_findings':  len(global_findings),
-        'criticals': criticals,
-        'warnings': warnings,
-        'infos': infos,
+        'criticals':       criticals,
+        'warnings':        warnings,
+        'infos':           infos,
+        'reco_critical':   reco_critical,
+        'reco_warning':    reco_warning,
+        'reco_info':       reco_info,
+        'confirmed_findings': confirmed_findings,
+        'uncovered_findings': uncovered_findings,
         'compliant_count': len(compliant_rules),
         'compliant_rules': compliant_rules,
         'orphan_count': len(orphan_gpos),
@@ -6219,6 +6232,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
     <div class="sub-item" onclick="showSub('security','critical')"><span class="si-icon">🔴</span>Critiques<span class="si-count" style="color:var(--red)">{{ data.criticals }}</span></div>
     <div class="sub-item" onclick="showSub('security','warnings')"><span class="si-icon">🟡</span>Alertes<span class="si-count" style="color:var(--amber)">{{ data.warnings }}</span></div>
     <div class="sub-item" onclick="showSub('security','compliant')"><span class="si-icon">✅</span>Conformes<span class="si-count" style="color:var(--green)">{{ data.compliant_count }}</span></div>
+    <div class="sub-item" onclick="showSub('security','reco')"><span class="si-icon">💡</span>Recommandations<span class="si-count" style="color:var(--txt3)">{{ data.reco_critical + data.reco_warning + data.reco_info }}</span></div>
     <div class="sub-item" onclick="showSub('security','conflicts')"><span class="si-icon">⚡</span>Conflits<span class="si-count" style="color:{% if data.conflicts_high>0%}var(--red){% else %}var(--txt3){% endif %}">{{ data.conflicts_high + data.conflicts_low }}</span></div>
     <div class="sub-item" onclick="showSub('security','orphans')"><span class="si-icon">◌</span>Orphelines<span class="si-count">{{ data.orphan_count }}</span></div>
   </div>
@@ -6263,11 +6277,11 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <div class="metrics-row">
         <div class="metric-card red" onclick="showSub('security','critical')">
           <div class="mv">{{ data.criticals }}</div>
-          <div class="ml">🔴 Critiques confirmés</div>
+          <div class="ml">🔴 Critiques (confirmés)</div>
         </div>
         <div class="metric-card amber" onclick="showSub('security','warnings')">
           <div class="mv">{{ data.warnings }}</div>
-          <div class="ml">🟡 Alertes</div>
+          <div class="ml">🟡 Alertes (confirmées)</div>
         </div>
         <div class="metric-card green" onclick="showSub('security','compliant')">
           <div class="mv">{{ data.compliant_count }}</div>
@@ -6276,6 +6290,10 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
         <div class="metric-card blue" onclick="showSub('security','conflicts')">
           <div class="mv">{{ data.conflicts_high + data.conflicts_low }}</div>
           <div class="ml">⚡ Conflits GPO</div>
+        </div>
+        <div class="metric-card" style="cursor:pointer;background:var(--surface2);border:1px solid var(--border)" onclick="showSub('security','reco')">
+          <div class="mv" style="color:var(--txt2)">{{ data.reco_critical + data.reco_warning + data.reco_info }}</div>
+          <div class="ml" style="color:var(--txt3)">💡 Recommandations</div>
         </div>
       </div>
 
@@ -6451,7 +6469,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       </div>
 
       <!-- Priorités : top 5 critiques -->
-      {% set crit_findings = data.all_findings | selectattr('severity','eq','critical') | list %}
+      {% set crit_findings = data.confirmed_findings | selectattr('severity','eq','critical') | list %}
       {% if crit_findings %}
       <div class="section-title">🔴 Actions prioritaires <span class="st-count">{{ crit_findings|length }} à corriger</span></div>
       <div class="finding-list">
@@ -6489,7 +6507,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       {% endif %}
 
       <!-- Alertes résumé -->
-      {% set warn_findings = data.all_findings | selectattr('severity','eq','warning') | list %}
+      {% set warn_findings = data.confirmed_findings | selectattr('severity','eq','warning') | list %}
       {% if warn_findings %}
       <div class="section-title">🟡 Alertes <span class="st-count">{{ warn_findings|length }}</span></div>
       <div class="finding-list">
@@ -6519,8 +6537,21 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       </div>
       {% endif %}
 
-      {% if not data.all_findings %}
-      <div class="empty-state"><div class="es-icon">🎉</div><div class="es-title">Aucun écart détecté</div><div class="es-sub">Toutes les règles CIS / ANSSI / MS Baseline sont respectées.</div></div>
+      {% if data.uncovered_findings %}
+      <div class="section-title" style="margin-top:8px">💡 Recommandations <span class="st-count">{{ data.uncovered_findings|length }} paramètres non couverts par GPO</span></div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:16px">
+        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px">Ces paramètres importants ne sont pas configurés explicitement via GPO — la valeur par défaut Windows s'applique et peut être insuffisante.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          {% if data.reco_critical %}<span style="font-size:12px;padding:3px 10px;border-radius:12px;background:rgba(220,60,60,.1);color:var(--red);border:1px solid rgba(220,60,60,.2)">🔴 {{ data.reco_critical }} haute priorité</span>{% endif %}
+          {% if data.reco_warning %}<span style="font-size:12px;padding:3px 10px;border-radius:12px;background:rgba(212,137,42,.1);color:var(--amber);border:1px solid rgba(212,137,42,.2)">🟡 {{ data.reco_warning }} normale</span>{% endif %}
+          {% if data.reco_info %}<span style="font-size:12px;padding:3px 10px;border-radius:12px;background:var(--surface2);color:var(--txt3);border:1px solid var(--border)">ℹ {{ data.reco_info }} optionnel</span>{% endif %}
+        </div>
+        <button class="filter-btn" style="width:100%" onclick="showSub('security','reco')">Voir toutes les recommandations →</button>
+      </div>
+      {% endif %}
+
+      {% if not data.confirmed_findings %}
+      <div class="empty-state"><div class="es-icon">🎉</div><div class="es-title">Aucun problème confirmé</div><div class="es-sub">Aucun paramètre explicitement mal configuré dans vos GPO.{% if data.uncovered_findings %} Consultez les recommandations pour renforcer votre configuration.{% endif %}</div></div>
       {% endif %}
     </div>
   </div>
@@ -6541,7 +6572,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
         <button class="export-btn" onclick="exportFindings('csv')">⬇ CSV</button>
       </div>
       <div class="finding-list" id="fl-critical">
-        {% for f in data.all_findings | selectattr('severity','eq','critical') | list %}
+        {% for f in data.confirmed_findings | selectattr('severity','eq','critical') | list %}
         <div class="finding-card critical" data-sev="critical" data-txt="{{ f.title|lower }} {{ f.category|lower }}" data-guids="{{ (f.source_gpos or [])|map(attribute='guid')|join(',') }}">
           <div class="fc-head" onclick="togFC(this)">
             <div class="fc-sev critical"></div>
@@ -6566,7 +6597,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
           </div>
         </div>
         {% endfor %}
-        {% if not (data.all_findings | selectattr('severity','eq','critical') | list) %}
+        {% if not (data.confirmed_findings | selectattr('severity','eq','critical') | list) %}
         <div class="empty-state"><div class="es-icon">✅</div><div class="es-title">Aucun problème critique</div></div>
         {% endif %}
       </div>
@@ -6588,7 +6619,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
         </select>
       </div>
       <div class="finding-list" id="fl-warning">
-        {% for f in data.all_findings | selectattr('severity','eq','warning') | list %}
+        {% for f in data.confirmed_findings | selectattr('severity','eq','warning') | list %}
         <div class="finding-card warning" data-sev="warning" data-txt="{{ f.title|lower }} {{ f.category|lower }}" data-guids="{{ (f.source_gpos or [])|map(attribute='guid')|join(',') }}">
           <div class="fc-head" onclick="togFC(this)">
             <div class="fc-sev warning"></div>
@@ -6720,6 +6751,103 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       {% endfor %}
       {% else %}
       <div class="empty-state"><div class="es-icon">✅</div><div class="es-title">Aucune GPO orpheline</div></div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- SUB : Recommandations -->
+  <div id="sub-security-reco" style="display:none">
+    <div class="page-header">
+      <h2>💡 Recommandations — Paramètres non couverts par GPO</h2>
+      <p>Ces paramètres importants ne sont pas configurés explicitement dans vos GPO — la valeur par défaut Windows s'applique, ce qui peut être insuffisant</p>
+    </div>
+    <div class="content-area"><button onclick="goBack()" style="margin-bottom:16px;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--txt2);font-size:12px;cursor:pointer">← Retour</button>
+      <div class="info-box" style="background:rgba(74,127,212,.08);border-color:rgba(74,127,212,.25);color:var(--txt2)">
+        💡 Ces éléments ne sont <strong>pas des vulnérabilités confirmées</strong> — ce sont des paramètres que vous devriez envisager de configurer explicitement dans vos GPO pour renforcer votre sécurité.
+        <br>Contrairement aux critiques et alertes, ils n'impactent <strong>pas le score de risque</strong>.
+      </div>
+
+      {% set reco_crits = data.uncovered_findings | selectattr('severity','eq','critical') | list %}
+      {% set reco_warns = data.uncovered_findings | selectattr('severity','eq','warning') | list %}
+      {% set reco_infos = data.uncovered_findings | selectattr('severity','eq','info') | list %}
+
+      {% if reco_crits %}
+      <div class="section-title" style="margin-top:16px">🔴 Priorité haute — valeur par défaut Windows insuffisante ({{ reco_crits|length }})</div>
+      <div class="finding-list">
+        {% for f in reco_crits %}
+        <div class="finding-card warning">
+          <div class="fc-head" onclick="togFC(this)">
+            <div class="fc-sev" style="background:var(--red);opacity:.6"></div>
+            <div class="fc-main">
+              <div class="fc-title">{{ f.title }}</div>
+              <div class="fc-meta"><span>{{ f.category }}</span><span>· {{ f.ref }}</span></div>
+            </div>
+            <span class="fc-pill" style="background:rgba(220,60,60,.1);color:var(--red);border:1px solid rgba(220,60,60,.25)">à configurer</span>
+            <span class="fc-arrow">▶</span>
+          </div>
+          <div class="fc-body">
+            <div style="font-size:12px;color:var(--txt3);padding:6px 10px;background:var(--surface2);border-radius:4px;margin-bottom:8px">{{ f.detail }}</div>
+            {% if f.get('rec_value') %}<div style="font-size:11px;color:var(--blue);padding:4px 10px;background:var(--blue-bg);border-radius:4px;margin-bottom:6px">🎯 Valeur recommandée : <strong>{{ f.rec_value }}</strong></div>{% endif %}
+            <div class="fc-reco">✅ {{ f.remediation }}</div>
+            {% if f.get('scope_note') %}<div style="margin-top:6px;font-size:11px;padding:8px 12px;background:var(--blue-bg);border:1px solid rgba(74,127,212,.2);border-radius:4px;color:var(--blue)">{{ f.scope_note }}</div>{% endif %}
+            <div class="explain-zone" id="ez-r-{{ f.rule_id }}"></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if reco_warns %}
+      <div class="section-title" style="margin-top:16px">🟡 Priorité normale ({{ reco_warns|length }})</div>
+      <div class="finding-list">
+        {% for f in reco_warns %}
+        <div class="finding-card info">
+          <div class="fc-head" onclick="togFC(this)">
+            <div class="fc-sev" style="background:var(--amber);opacity:.6"></div>
+            <div class="fc-main">
+              <div class="fc-title">{{ f.title }}</div>
+              <div class="fc-meta"><span>{{ f.category }}</span><span>· {{ f.ref }}</span></div>
+            </div>
+            <span class="fc-pill" style="background:rgba(212,137,42,.1);color:var(--amber);border:1px solid rgba(212,137,42,.25)">à configurer</span>
+            <span class="fc-arrow">▶</span>
+          </div>
+          <div class="fc-body">
+            <div style="font-size:12px;color:var(--txt3);padding:6px 10px;background:var(--surface2);border-radius:4px;margin-bottom:8px">{{ f.detail }}</div>
+            {% if f.get('rec_value') %}<div style="font-size:11px;color:var(--blue);padding:4px 10px;background:var(--blue-bg);border-radius:4px;margin-bottom:6px">🎯 Valeur recommandée : <strong>{{ f.rec_value }}</strong></div>{% endif %}
+            <div class="fc-reco">✅ {{ f.remediation }}</div>
+            <div class="explain-zone" id="ez-r-{{ f.rule_id }}"></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if reco_infos %}
+      <div class="section-title" style="margin-top:16px">ℹ Optionnel ({{ reco_infos|length }})</div>
+      <div class="finding-list">
+        {% for f in reco_infos %}
+        <div class="finding-card info">
+          <div class="fc-head" onclick="togFC(this)">
+            <div class="fc-sev info"></div>
+            <div class="fc-main">
+              <div class="fc-title">{{ f.title }}</div>
+              <div class="fc-meta"><span>{{ f.category }}</span><span>· {{ f.ref }}</span></div>
+            </div>
+            <span class="fc-pill info">info</span>
+            <span class="fc-arrow">▶</span>
+          </div>
+          <div class="fc-body">
+            <div style="font-size:12px;color:var(--txt3);padding:6px 10px;background:var(--surface2);border-radius:4px;margin-bottom:8px">{{ f.detail }}</div>
+            {% if f.get('rec_value') %}<div style="font-size:11px;color:var(--blue);padding:4px 10px;background:var(--blue-bg);border-radius:4px;margin-bottom:6px">🎯 Valeur recommandée : <strong>{{ f.rec_value }}</strong></div>{% endif %}
+            <div class="fc-reco">✅ {{ f.remediation }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if not data.uncovered_findings %}
+      <div class="empty-state"><div class="es-icon">✅</div><div class="es-title">Tous les paramètres importants sont couverts par vos GPO</div></div>
       {% endif %}
     </div>
   </div>
