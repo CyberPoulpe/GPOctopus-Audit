@@ -5155,6 +5155,7 @@ def analyze_gpos(gpos: list) -> dict:
         'wmi_count':          sum(1 for g in gpos if g.get('wmi_filter')),
         'default_gpo_status': [f for f in default_gpo_findings],
         'catchall_gpos':      catchall_gpos,
+        'empty_gpo_guids':    [r['guid'] for r in gpo_reports if not r.get('has_content', True)],
         'search_index':       build_search_index(_enrich_gpos_for_search(gpos, gpo_reports)),
     }
 
@@ -6384,16 +6385,6 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
   </div>
 
   <!-- SUB : GPO Détail -->
-  <div id="sub-diag-gpodetail" style="display:none">
-    <div class="gpo-detail-header" id="gpo-detail-header">
-      <!-- rempli par JS -->
-    </div>
-    <div class="content-area">
-      <button class="back-btn" onclick="goBackFromDetail()">← Retour</button>
-      <div id="gpo-detail-body"></div>
-    </div>
-  </div>
-
 </div><!-- /tab-diag -->
 
 
@@ -6435,6 +6426,8 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
 <script id="gpo-json" type="application/json">{{ data.gpo_reports | tojson }}</script>
 <script id="content-index-json" type="application/json">{{ data.gpo_content_index | tojson }}</script>
 <script id="search-index-json" type="application/json">{{ data.search_index | tojson }}</script>
+<script id="catchall-json" type="application/json">{{ data.catchall_gpos | tojson }}</script>
+<script id="empty-json" type="application/json">{{ data.empty_gpo_guids | tojson }}</script>
 <script>
 // ══════════════════════════════════════════════════════════════════════
 // INIT
@@ -6470,6 +6463,17 @@ window.addEventListener('DOMContentLoaded', () => {
 
   try { _gpos = JSON.parse(document.getElementById('gpo-json').textContent); } catch(e){}
 
+  // Index des GPO fourre-tout et vides pour les badges
+  try {
+    const catchall = JSON.parse(document.getElementById('catchall-json').textContent || '[]');
+    const empty    = JSON.parse(document.getElementById('empty-json').textContent || '[]');
+    window._catchallGuids = new Set(catchall.map(g=>g.gpo_guid));
+    window._emptyGuids    = new Set(empty);
+  } catch(e) {
+    window._catchallGuids = new Set();
+    window._emptyGuids    = new Set();
+  }
+
   requestAnimationFrame(() => {
     document.getElementById('loader').classList.add('done');
     setTimeout(() => { const l=document.getElementById('loader'); if(l)l.remove(); }, 400);
@@ -6490,7 +6494,7 @@ let _navStack = [];  // pile de navigation complète
 
 function _pushNav() {
   _navStack.push({tab: _currentTab, sub: _currentSub[_currentTab]});
-  if(_navStack.length > 20) _navStack.shift();
+  if(_navStack.length > 30) _navStack.shift();
   _updateBackBtn();
 }
 
@@ -6524,66 +6528,103 @@ function goBack() {
   if(_navStack.length === 0) return;
   const prev = _navStack.pop();
   _updateBackBtn();
-  switchTab(prev.tab, true);
-  showSub(prev.tab, prev.sub, true);
+  _switchTabInternal(prev.tab);
+  _showSubInternal(prev.tab, prev.sub);
 }
 
-function switchTab(tab, skipHistory) {
-  if(!skipHistory) _pushNav();
-  // Désactiver tous les onglets
+// ── Navigation interne (sans push sur la pile) ──────────────────────────────
+function _switchTabInternal(tab) {
   document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.main-tab').forEach(b=>b.classList.remove('active'));
   document.querySelectorAll('.sub-nav').forEach(n=>n.style.display='none');
-
   document.getElementById('tab-'+tab).classList.add('active');
   document.getElementById('tab-btn-'+tab).classList.add('active');
   document.getElementById('subnav-'+tab).style.display='';
-
   _currentTab = tab;
-  showSub(tab, _currentSub[tab], true);
 }
 
-function showSub(tab, sub, skipHistory) {
-  if(!skipHistory) _pushNav();
-  // Cacher toutes les sous-vues du tab
+function _showSubInternal(tab, sub) {
   const tabEl = document.getElementById('tab-'+tab);
+  if(!tabEl) return;
   tabEl.querySelectorAll('[id^="sub-'+tab+'-"]').forEach(el=>el.style.display='none');
-
   const el = document.getElementById('sub-'+tab+'-'+sub);
   if(el) el.style.display='';
-
   _currentSub[tab] = sub;
-
-  // Mettre à jour la sous-nav
   document.querySelectorAll('#subnav-'+tab+' .sub-item').forEach(si=>{
     si.classList.toggle('active', si.getAttribute('onclick') && si.getAttribute('onclick').includes("'"+sub+"'"));
   });
-
-  // Lazy init
   if(tab==='inventory' && sub==='byou') renderByOU('');
   if(tab==='inventory' && sub==='bytype') renderByType();
   if(tab==='diag' && sub==='timeline') renderTimeline();
   if(tab==='diag' && sub==='gpolist') renderGPOList(_gpos);
 }
 
-function openGPODetail(guid) {
+// ── Navigation publique (avec push sur la pile) ─────────────────────────────
+function switchTab(tab) {
   _pushNav();
-  _prevSub = {tab:_currentTab, sub:_currentSub[_currentTab]};
-  if(_currentTab !== 'diag') switchTab('diag', true);
-  showSub('diag','gpodetail', true);
-  renderGPODetail(guid);
+  _switchTabInternal(tab);
+  _showSubInternal(tab, _currentSub[tab]);
 }
 
+function showSub(tab, sub) {
+  _pushNav();
+  if(_currentTab !== tab) _switchTabInternal(tab);
+  _showSubInternal(tab, sub);
+}
+
+// ── Overlay GPO Détail ───────────────────────────────────────────────────────
+function openGPODetail(guid) {
+  // Ouvre la fiche GPO dans un panneau overlay — ne change PAS l'onglet courant
+  const overlay = document.getElementById('gpo-overlay');
+  const body    = document.getElementById('gpo-overlay-body');
+  const title   = document.getElementById('gpo-overlay-title');
+  const meta    = document.getElementById('gpo-overlay-meta');
+  if(!overlay) return;
+
+  const g = _gpos.find(x=>x.guid===guid);
+  if(!g) return;
+
+  // Remplir le header
+  title.textContent = g.name;
+  const flags = parseInt(g.flags||0);
+  const flagStr = flags===3?'⊘ Entièrement désactivée':flags===1?'⊘ Config. ordinateur désactivée':flags===2?'⊘ Config. utilisateur désactivée':'';
+  meta.innerHTML = [
+    g.guid,
+    g.changed ? '📅 ' + g.changed.slice(0,10) : '',
+    flagStr ? '<span style="color:var(--amber)">'+flagStr+'</span>' : '',
+    g.wmi_filter ? '<span style="color:var(--blue)">⚙ WMI : '+_escHtml(g.wmi_filter.name||'')+'</span>' : '',
+  ].filter(Boolean).join(' · ');
+
+  // Remplir le corps avec renderGPODetail
+  body.innerHTML = '';
+  renderGPODetail(guid, body);
+
+  // Afficher l'overlay
+  overlay.style.display = 'block';
+  document.body.style.overflow = 'hidden';
+  // Animer l'entrée
+  const panel = document.getElementById('gpo-overlay-panel');
+  panel.style.transform = 'translateX(100%)';
+  panel.style.transition = 'transform .25s ease';
+  requestAnimationFrame(()=>{ panel.style.transform = 'translateX(0)'; });
+}
+
+function closeGPOOverlay() {
+  const overlay = document.getElementById('gpo-overlay');
+  const panel   = document.getElementById('gpo-overlay-panel');
+  if(!overlay) return;
+  panel.style.transform = 'translateX(100%)';
+  setTimeout(()=>{
+    overlay.style.display = 'none';
+    document.body.style.overflow = '';
+  }, 250);
+}
+
+// Fermer avec Échap
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeGPOOverlay(); });
+
 function goBackFromDetail() {
-  if(_navStack.length > 0) {
-    goBack();
-  } else if(_prevSub) {
-    switchTab(_prevSub.tab, true);
-    showSub(_prevSub.tab, _prevSub.sub, true);
-    _prevSub = null;
-  } else {
-    showSub('diag','gpolist', true);
-  }
+  closeGPOOverlay();
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -6832,6 +6873,8 @@ function renderGPOList(gpos){
 
     const critCount=(gpo.findings||[]).filter(f=>f.severity==='critical').length;
     const warnCount=(gpo.findings||[]).filter(f=>f.severity==='warning').length;
+    const isCatchall = window._catchallGuids && window._catchallGuids.has(gpo.guid);
+    const isEmpty    = window._emptyGuids    && window._emptyGuids.has(gpo.guid);
 
     return`<div class="gpo-card" data-guid="${gpo.guid}" data-issues="${(gpo.findings||[]).length}" data-orphan="${gpo.is_orphan}" data-wmi="${!!gpo.wmi_filter}">
       <div class="gpo-card-head" onclick="openGPODetail('${gpo.guid}')">
@@ -6842,6 +6885,8 @@ function renderGPOList(gpos){
           ${warnCount>0?`<span class="badge score-mid">🟡 ${warnCount}</span>`:''}
           ${flg===3?'<span class="badge disabled">désactivée</span>':flg===1?'<span class="badge disabled">PC off</span>':flg===2?'<span class="badge disabled">User off</span>':''}
           ${gpo.is_orphan?'<span class="badge orphan">orpheline</span>':''}
+          ${isEmpty?'<span class="badge disabled" title="Aucun paramètre configuré">◌ vide</span>':''}
+          ${isCatchall?'<span class="badge" style="background:rgba(212,137,42,.15);color:var(--amber);border:1px solid rgba(212,137,42,.3)" title="Mélange trop de catégories — à découper">📦 fourre-tout</span>':''}
           ${gpo.wmi_filter?'<span class="badge wmi">WMI</span>':''}
           ${links.some(l=>l.enforced)?'<span class="badge enforced">ENFORCED</span>':''}
         </div>
@@ -6866,7 +6911,9 @@ const ATTACK_EXAMPLES={
   'REGXML-001':{attack:'Pass-the-Hash via C$/ADMIN$ sur tous les postes du domaine',tool:'CrackMapExec, Impacket',impact:'Mouvement latéral trivial sur tout le parc'},
 };
 
-function renderGPODetail(guid){
+function renderGPODetail(guid, container){
+  const target = container || document.getElementById('gpo-detail-body') || document.getElementById('gpo-overlay-body');
+  if(!target) return;
   const g=_gpos.find(x=>x.guid===guid);
   if(!g) return;
 
@@ -6970,7 +7017,7 @@ function renderGPODetail(guid){
     body+=`<div style="color:var(--txt3);padding:20px 0;font-size:13px;text-align:center">Aucun paramètre lu depuis le SYSVOL pour cette GPO.</div>`;
   }
 
-  document.getElementById('gpo-detail-body').innerHTML=body;
+  target.innerHTML=body;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -7121,6 +7168,8 @@ function renderByOU(filter){
             ${g.disabled?'<span class="badge disabled">lien off</span>':''}
             ${parseInt(g.flags||0)===3?'<span class="badge disabled">GPO off</span>':''}
             ${g.wmi?'<span class="badge wmi">WMI</span>':''}
+            ${window._emptyGuids&&window._emptyGuids.has(g.guid)?'<span class="badge disabled">◌ vide</span>':''}
+            ${window._catchallGuids&&window._catchallGuids.has(g.guid)?'<span class="badge" style="background:rgba(212,137,42,.15);color:var(--amber);border:1px solid rgba(212,137,42,.3)">📦 fourre-tout</span>':''}
           </div>`;
         });
       }
@@ -7359,6 +7408,22 @@ function _highlight(text,tokens){
   return s;
 }
 </script>
+
+<!-- ════════ OVERLAY GPO DÉTAIL ════════════════════════════════════════════ -->
+<div id="gpo-overlay" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.55);backdrop-filter:blur(2px)" onclick="if(event.target===this)closeGPOOverlay()">
+  <div id="gpo-overlay-panel" style="position:absolute;top:0;right:0;width:min(780px,100vw);height:100vh;background:var(--bg);overflow-y:auto;box-shadow:-8px 0 40px rgba(0,0,0,.3);display:flex;flex-direction:column">
+    <!-- Header panneau -->
+    <div id="gpo-overlay-header" style="padding:16px 20px;border-bottom:1px solid var(--border);background:var(--surface);position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div id="gpo-overlay-title" style="font-size:15px;font-weight:700;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+        <div id="gpo-overlay-meta" style="font-size:11px;color:var(--txt3);margin-top:2px"></div>
+      </div>
+      <button onclick="closeGPOOverlay()" style="flex-shrink:0;width:32px;height:32px;border-radius:50%;background:var(--surface2);border:1px solid var(--border);color:var(--txt2);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center" title="Fermer">✕</button>
+    </div>
+    <!-- Corps du panneau -->
+    <div id="gpo-overlay-body" style="padding:20px;flex:1"></div>
+  </div>
+</div>
 </body>
 </html>
 """
