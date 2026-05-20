@@ -4470,59 +4470,58 @@ def check_default_gpo_modifications(gpos: list) -> list:
     return findings
 
 def detect_catchall_gpos(gpos: list) -> list:
-    """Détecte les GPO qui couvrent trop de domaines différents (fourre-tout)."""
-    CATEGORIES = {
-        'Mots de passe / Verrouillage': [('settings','password_policy'),('settings','system_access')],
-        'Audit':                         [('settings','event_audit'),('gpo','audit_csv')],
-        'Droits utilisateurs':           [('settings','privilege_rights')],
-        'Kerberos':                      [('settings','kerberos_policy')],
-        'Options de sécurité':           [('settings','registry_values')],
-        'Paramètres ADMX':               [('gpo','registry_entries')],
-        'Préférences registre':          [('gpo','registry_xml_machine'),('gpo','registry_xml_user')],
-        'Scripts':                       [('gpo','scripts')],
-        'Imprimantes':                   [('gpo','printers'),('gpo','printers_user')],
-        'Lecteurs réseau':               [('gpo','drives'),('gpo','drives_user')],
-        'Tâches planifiées':             [('gpo','scheduled_tasks')],
-        'Groupes locaux':                [('gpo','groups')],
-        'Services':                      [('gpo','services')],
-        'Logiciels':                     [('gpo','software_machine'),('gpo','software_user')],
-        'Partages réseau':               [('gpo','network_shares')],
-        'Dossiers':                      [('gpo','folders_machine'),('gpo','folders_user')],
-        'Sources ODBC':                  [('gpo','datasources_machine'),('gpo','datasources_user')],
-        'Proxy / Internet':              [('gpo','internet_settings')],
-        'VPN / Réseau':                  [('gpo','network_options')],
-        'Fichiers INI':                  [('gpo','ini_files_machine'),('gpo','ini_files_user')],
-    }
-    CATCHALL_THRESHOLD = 3  # 3 catégories fonctionnelles distinctes = fourre-tout
+    """Détecte les GPO fourre-tout.
+    Critères (OR) :
+    1. ≥ 3 catégories fonctionnelles distinctes avec du contenu réel
+    2. Volume total de paramètres ≥ 30 (GPO trop générique)
+    3. Config ordinateur + utilisateur mélangées avec ≥ 2 catégories
+    """
+    CATCHALL_THRESHOLD_CATS   = 3
+    CATCHALL_THRESHOLD_PARAMS = 30
     DEFAULT_GUIDS = {'{31B2F340-016D-11D2-945F-00C04FB984F9}',
                      '{6AC1786C-016F-11D2-945F-00C04FB984F9}'}
-    findings = []
 
-    # Catégories fonctionnelles — ce qui compte c'est le TYPE de paramètre, pas la technique
     FUNC_CATEGORIES = {
-        # Stratégies de sécurité (GptTmpl.inf)
-        'Politique de mots de passe':     [('settings','password_policy')],
-        'Audit des événements':           [('settings','event_audit')],
-        'Droits utilisateurs':            [('settings','privilege_rights')],
-        'Options de sécurité':            [('settings','system_access'),('settings','registry_values')],
-        'Kerberos':                       [('settings','kerberos_policy')],
-        # Modèles d'administration (ADMX via Registry.pol)
-        'Paramètres ADMX/Stratégies':     [('gpo','registry_entries')],
-        # Préférences GPO (XML)
-        'Préférences registre':           [('gpo','registry_xml_machine'),('gpo','registry_xml_user')],
-        'Scripts':                        [('gpo','scripts')],
-        'Imprimantes':                    [('gpo','printers'),('gpo','printers_user')],
-        'Lecteurs réseau':                [('gpo','drives'),('gpo','drives_user')],
-        'Tâches planifiées':              [('gpo','scheduled_tasks')],
-        'Groupes locaux':                 [('gpo','groups')],
-        'Services':                       [('gpo','services')],
-        'Logiciels':                      [('gpo','software_machine'),('gpo','software_user')],
-        'Partages réseau':                [('gpo','network_shares')],
-        'Dossiers':                       [('gpo','folders_machine'),('gpo','folders_user')],
-        'Options réseau / VPN':           [('gpo','network_options')],
-        'Internet / Proxy':               [('gpo','internet_settings')],
+        'Politique de mots de passe': [('settings','password_policy')],
+        'Audit des événements':       [('settings','event_audit')],
+        'Droits utilisateurs':        [('settings','privilege_rights')],
+        'Options de sécurité':        [('settings','system_access'),('settings','registry_values')],
+        'Kerberos':                   [('settings','kerberos_policy')],
+        'Paramètres ADMX':            [('gpo','registry_entries')],
+        'Préférences registre':       [('gpo','registry_xml_machine'),('gpo','registry_xml_user')],
+        'Scripts':                    [('gpo','scripts')],
+        'Imprimantes':                [('gpo','printers'),('gpo','printers_user')],
+        'Lecteurs réseau':            [('gpo','drives'),('gpo','drives_user')],
+        'Tâches planifiées':          [('gpo','scheduled_tasks')],
+        'Groupes locaux':             [('gpo','groups')],
+        'Services':                   [('gpo','services')],
+        'Logiciels':                  [('gpo','software_machine'),('gpo','software_user')],
+        'Partages réseau':            [('gpo','network_shares')],
+        'Dossiers':                   [('gpo','folders_machine'),('gpo','folders_user')],
+        'Options réseau / VPN':       [('gpo','network_options')],
+        'Internet / Proxy':           [('gpo','internet_settings')],
     }
 
+    SUGGESTIONS_MAP = {
+        'Politique de mots de passe': 'O-Securite-MotsDePasse → politique de mots de passe',
+        'Audit des événements':       'O-Audit-Evenements → configuration de l\'audit',
+        'Scripts':                    'O-Scripts-Logon → scripts logon/logoff | O-Scripts-Machine → startup/shutdown',
+        'Imprimantes':                'O-Imprimantes → déploiement d\'imprimantes',
+        'Préférences registre':       'O-Securite-Registre → paramètres de registre',
+        'Logiciels':                  'O-Logiciels → installation de logiciels',
+        'Tâches planifiées':          'O-Taches-Planifiees → tâches planifiées',
+        'Droits utilisateurs':        'O-Droits-Utilisateurs → attribution des droits',
+        'Lecteurs réseau':            'U-Lecteurs-Reseau → lecteurs réseau mappés',
+        'Groupes locaux':             'O-Groupes-Locaux → groupes locaux',
+        'Services':                   'O-Services-Windows → services Windows',
+        'Partages réseau':            'O-Partages-Reseau → partages réseau',
+        'Options réseau / VPN':       'U-VPN-Connexions → options réseau/VPN',
+        'Kerberos':                   'Default Domain Policy → stratégie Kerberos',
+        'Options de sécurité':        'O-Securite-Options → options de sécurité',
+        'Paramètres ADMX':            'O-Securite-ADMX → paramètres de stratégie (ADMX)',
+    }
+
+    findings = []
     for gpo in gpos:
         if gpo.get('guid', '').upper() in DEFAULT_GUIDS:
             continue
@@ -4530,64 +4529,90 @@ def detect_catchall_gpos(gpos: list) -> list:
             continue
         settings = gpo.get('settings', {})
 
+        # ── Catégories présentes ────────────────────────────────────────────
         present = []
         for cat_name, sources in FUNC_CATEGORIES.items():
             for (src_type, key) in sources:
                 content = gpo.get(key) if src_type == 'gpo' else settings.get(key)
                 if not content:
                     continue
-                # Vérifier que le contenu est non-vide
-                if isinstance(content, list) and len(content) > 0:
+                if key == 'scripts':
+                    # Vérifier que les scripts ont vraiment un cmd non vide
+                    has = any(
+                        isinstance(v, dict) and v.get('cmd')
+                        for lst in content.values() if isinstance(lst, list)
+                        for v in lst
+                    )
+                    if has:
+                        present.append(cat_name); break
+                elif isinstance(content, list) and len(content) > 0:
                     present.append(cat_name); break
                 elif isinstance(content, dict) and any(v for v in content.values() if v):
                     present.append(cat_name); break
 
-        # Détecter si la GPO configure à la fois ordinateur ET utilisateur
-        # C'est un signe fort de GPO fourre-tout
-        has_computer_pref = any([
+        # ── Volume total de paramètres ──────────────────────────────────────
+        total_params = 0
+        total_params += len(gpo.get('registry_entries', []))
+        total_params += len(gpo.get('registry_entries_user', []))
+        total_params += len(gpo.get('registry_xml_machine', []))
+        total_params += len(gpo.get('registry_xml_user', []))
+        total_params += len(gpo.get('printers', []))
+        total_params += len(gpo.get('drives', []))
+        total_params += len(gpo.get('scheduled_tasks', []))
+        total_params += len(gpo.get('groups', []))
+        total_params += sum(
+            len(lst) for lst in (gpo.get('scripts') or {}).values()
+            if isinstance(lst, list)
+        )
+        for section_data in settings.values():
+            if isinstance(section_data, dict):
+                total_params += sum(1 for v in section_data.values() if v)
+
+        # ── Ordinateur + Utilisateur mélangés ──────────────────────────────
+        scripts = gpo.get('scripts') or {}
+        has_computer = any([
             bool(gpo.get('registry_entries')),
             bool(gpo.get('printers')),
             bool(gpo.get('registry_xml_machine')),
             bool(settings.get('password_policy')),
             bool(settings.get('event_audit')),
             bool(settings.get('privilege_rights')),
+            any(isinstance(v,dict) and v.get('cmd') for v in scripts.get('startup',[]) + scripts.get('shutdown',[])),
         ])
-        has_user_pref = any([
+        has_user = any([
             bool(gpo.get('drives')),
             bool(gpo.get('printers_user')),
             bool(gpo.get('registry_xml_user')),
             bool(gpo.get('internet_settings')),
-            bool(gpo.get('network_options')),
-            bool(gpo.get('regional')),
+            any(isinstance(v,dict) and v.get('cmd') for v in scripts.get('logon',[]) + scripts.get('logoff',[])),
         ])
-        if has_computer_pref and has_user_pref:
-            if 'Config. ordinateur + utilisateur' not in present:
-                present.append('Config. ordinateur + utilisateur')
+        mixed_scopes = has_computer and has_user
+        if mixed_scopes and 'Config. ordinateur + utilisateur' not in present:
+            present.append('Config. ordinateur + utilisateur')
 
-        if len(present) >= CATCHALL_THRESHOLD:
-            SUGGESTIONS_MAP = {
-                'Mots de passe / Verrouillage': 'O-Securite-MotsDePasse → politique de mots de passe',
-                'Audit':                         'O-Audit-Evenements → configuration de l\'audit',
-                'Scripts':                       'O-Scripts-Demarrage → scripts de démarrage/logon',
-                'Imprimantes':                   'O-Imprimantes → déploiement d\'imprimantes',
-                'Préférences registre':          'O-Securite-Registre → paramètres de registre',
-                'Logiciels':                     'O-Logiciels → installation de logiciels',
-                'Tâches planifiées':             'O-Taches-Planifiees → tâches planifiées',
-                'Droits utilisateurs':           'O-Droits-Utilisateurs → attribution des droits',
-                'Lecteurs réseau':               'U-Lecteurs-Reseau → lecteurs réseau mappés',
-                'Groupes locaux':                'O-Groupes-Locaux → groupes locaux',
-                'Services':                      'O-Services-Windows → services Windows',
-                'Partages réseau':               'O-Partages-Reseau → partages réseau',
-                'VPN / Réseau':                  'U-VPN-Connexions → options réseau/VPN',
-                'Kerberos':                      'DDP → stratégie Kerberos (Default Domain Policy)',
-                'Options de sécurité':           'O-Securite-Options → options de sécurité',
-            }
+        # ── Décision ────────────────────────────────────────────────────────
+        is_catchall = (
+            len(present) >= CATCHALL_THRESHOLD_CATS
+            or total_params >= CATCHALL_THRESHOLD_PARAMS
+            or (mixed_scopes and len(present) >= 2)
+        )
+
+        if is_catchall:
             suggestions = [SUGGESTIONS_MAP[c] for c in present if c in SUGGESTIONS_MAP]
+            reason = []
+            if len(present) >= CATCHALL_THRESHOLD_CATS:
+                reason.append(f"{len(present)} catégories fonctionnelles")
+            if total_params >= CATCHALL_THRESHOLD_PARAMS:
+                reason.append(f"{total_params} paramètres au total")
+            if mixed_scopes and len(present) >= 2:
+                reason.append("Ordinateur + Utilisateur mélangés")
             findings.append({
                 'gpo_name':    gpo['name'],
                 'gpo_guid':    gpo['guid'],
                 'categories':  present,
                 'cat_count':   len(present),
+                'total_params':total_params,
+                'reason':      ' · '.join(reason),
                 'suggestions': suggestions,
                 'links':       gpo.get('links', []),
             })
@@ -4889,7 +4914,25 @@ def analyze_gpos(gpos: list) -> dict:
 
         # Préparer le contenu lisible de la GPO
         content_sections = _format_gpo_content(gpo)
-        has_content = any(s['params'] for s in content_sections)
+
+        # has_content : la GPO a-t-elle du contenu réel ?
+        # On vérifie à la fois les sections formatées ET les champs bruts
+        # car certains contenus (scripts avec cmd vide, settings vides) peuvent
+        # produire des sections sans params
+        has_content = (
+            any(s['params'] for s in content_sections)
+            or bool(gpo.get('registry_entries'))
+            or bool(gpo.get('registry_entries_user'))
+            or any(
+                isinstance(v, list) and v
+                for v in (gpo.get('scripts') or {}).values()
+            )
+            or bool(gpo.get('settings') and any(
+                v for section in gpo['settings'].values()
+                if isinstance(section, dict)
+                for v in section.values() if v
+            ))
+        )
 
         gpo_reports.append({
             'name':            gpo['name'],
