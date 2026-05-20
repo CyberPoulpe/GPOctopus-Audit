@@ -1465,10 +1465,18 @@ def parse_services_xml(content: str) -> list:
     return services
 
 
-def parse_psscripts_ini(content: str) -> dict:
+def parse_psscripts_ini(content: str, is_user: bool = False) -> dict:
     """Parse psscripts.ini — scripts PowerShell GPO.
-    Même format que scripts.ini mais pour les scripts .ps1."""
-    return parse_scripts(content, '', '', '')
+    Même format que scripts.ini :
+    - Fichier machine : sections [Startup] et [Shutdown]
+    - Fichier utilisateur : sections [Logon] et [Logoff]
+    """
+    if is_user:
+        # psscripts.ini utilisateur contient [Logon] et [Logoff]
+        return parse_scripts('', '', content, content)
+    else:
+        # psscripts.ini machine contient [Startup] et [Shutdown]
+        return parse_scripts(content, content, '', '')
 
 
 def parse_software_xml(content: str) -> list:
@@ -3463,21 +3471,6 @@ class GPOCollector:
         if gpo.get('registry_entries_user'):
             gpo['registry_admx_user'] = parse_admx_registry(gpo['registry_entries_user'])
 
-        # psscripts.ini (PowerShell) — complète scripts.ini
-        ps_m = rt('Machine', 'Scripts', 'psscripts.ini')
-        ps_u = rt('User', 'Scripts', 'psscripts.ini')
-        if ps_m or ps_u:
-            ps = parse_psscripts_ini(ps_m or '')
-            ps_u_parsed = parse_psscripts_ini(ps_u or '')
-            # Fusionner avec les scripts existants
-            existing = gpo.get('scripts', {'startup':[],'shutdown':[],'logon':[],'logoff':[]})
-            for k in ('startup', 'shutdown'):
-                existing[k] = existing.get(k, []) + ps.get(k, [])
-            for k in ('logon', 'logoff'):
-                existing[k] = existing.get(k, []) + ps_u_parsed.get(k, [])
-            if any(existing.values()):
-                gpo['scripts'] = existing
-
         # ── Préférences User ──
         x = rx('User', 'Preferences', 'Printers', 'Printers.xml')
         if x: gpo['printers_user'] = parse_printers_xml(x)
@@ -3495,15 +3488,45 @@ class GPOCollector:
         x = rx('User', 'Preferences', 'Registry', 'Registry.xml')
         if x: gpo['registry_xml_user'] = parse_registry_xml(x)
 
-        # ── Scripts ──
-        sm_ini = rt('Machine', 'Scripts', 'scripts.ini')
-        su_ini = rt('User', 'Scripts', 'scripts.ini')
-        sc = parse_scripts(sm_ini, sm_ini, su_ini, su_ini)
+        # ── Scripts (scripts.ini + psscripts.ini) ──────────────────────────
+        # scripts.ini machine  → sections [Startup] [Shutdown]
+        # scripts.ini user     → sections [Logon]   [Logoff]
+        # psscripts.ini machine → idem mais pour PowerShell
+        # psscripts.ini user   → idem
+
+        sm_ini = rt('Machine', 'Scripts', 'scripts.ini') or ''
+        su_ini = rt('User',    'Scripts', 'scripts.ini') or ''
+        ps_m   = rt('Machine', 'Scripts', 'psscripts.ini') or ''
+        ps_u   = rt('User',    'Scripts', 'psscripts.ini') or ''
+
+        sc = {'startup': [], 'shutdown': [], 'logon': [], 'logoff': []}
+
+        # Parser scripts.ini
+        base = parse_scripts(sm_ini, sm_ini, su_ini, su_ini)
+        for k in sc: sc[k] += base.get(k, [])
+
+        # Parser psscripts.ini machine (sections Startup/Shutdown)
+        if ps_m:
+            ps = parse_psscripts_ini(ps_m, is_user=False)
+            sc['startup']  += ps.get('startup', [])
+            sc['shutdown'] += ps.get('shutdown', [])
+
+        # Parser psscripts.ini user (sections Logon/Logoff)
+        if ps_u:
+            ps_u_p = parse_psscripts_ini(ps_u, is_user=True)
+            sc['logon']  += ps_u_p.get('logon', [])
+            sc['logoff'] += ps_u_p.get('logoff', [])
+
+        # Fallback : lister les fichiers dans les dossiers SYSVOL si tout est vide
         if not any(sc.values()):
-            sc['startup']  = [{'cmd': f.get_longname(), 'params': ''} for f in self._list_scripts(smb_rel('Machine', 'Scripts', 'Startup'))]
-            sc['shutdown'] = [{'cmd': f.get_longname(), 'params': ''} for f in self._list_scripts(smb_rel('Machine', 'Scripts', 'Shutdown'))]
-            sc['logon']    = [{'cmd': f.get_longname(), 'params': ''} for f in self._list_scripts(smb_rel('User', 'Scripts', 'Logon'))]
-            sc['logoff']   = [{'cmd': f.get_longname(), 'params': ''} for f in self._list_scripts(smb_rel('User', 'Scripts', 'Logoff'))]
+            def _ls(path):
+                return [{'cmd': f.get_longname(), 'params': ''}
+                        for f in self._list_scripts(path) if f.get_longname()]
+            sc['startup']  = _ls(smb_rel('Machine', 'Scripts', 'Startup'))
+            sc['shutdown'] = _ls(smb_rel('Machine', 'Scripts', 'Shutdown'))
+            sc['logon']    = _ls(smb_rel('User',    'Scripts', 'Logon'))
+            sc['logoff']   = _ls(smb_rel('User',    'Scripts', 'Logoff'))
+
         if any(sc.values()):
             gpo['scripts'] = sc
 
