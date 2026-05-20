@@ -4493,7 +4493,7 @@ def detect_catchall_gpos(gpos: list) -> list:
         'VPN / Réseau':                  [('gpo','network_options')],
         'Fichiers INI':                  [('gpo','ini_files_machine'),('gpo','ini_files_user')],
     }
-    CATCHALL_THRESHOLD = 4
+    CATCHALL_THRESHOLD = 2  # dès 2 catégories différentes = potentiellement à découper
     DEFAULT_GUIDS = {'{31B2F340-016D-11D2-945F-00C04FB984F9}',
                      '{6AC1786C-016F-11D2-945F-00C04FB984F9}'}
     findings = []
@@ -4513,6 +4513,29 @@ def detect_catchall_gpos(gpos: list) -> list:
                         present.append(cat_name); break
                     elif isinstance(content, dict) and any(v for v in content.values() if v):
                         present.append(cat_name); break
+
+        # Détecter aussi les GPO qui configurent à la fois ordinateur ET utilisateur
+        has_computer = any([
+            bool(gpo.get('registry_entries')),
+            bool(gpo.get('scripts', {}).get('startup') or gpo.get('scripts', {}).get('shutdown')),
+            bool(gpo.get('printers')),
+            bool(settings.get('password_policy')),
+            bool(settings.get('event_audit')),
+            bool(settings.get('privilege_rights')),
+        ])
+        has_user = any([
+            bool(gpo.get('drives')),
+            bool(gpo.get('printers_user')),
+            bool(gpo.get('drives_user')),
+            bool(gpo.get('scripts', {}).get('logon') or gpo.get('scripts', {}).get('logoff')),
+            bool(gpo.get('registry_xml_user')),
+            bool(gpo.get('internet_settings')),
+            bool(gpo.get('network_options')),
+            bool(gpo.get('regional')),
+        ])
+        if has_computer and has_user and 'Ordinateur + Utilisateur' not in present:
+            present.append('Ordinateur + Utilisateur (à séparer)')
+
         if len(present) >= CATCHALL_THRESHOLD:
             SUGGESTIONS_MAP = {
                 'Mots de passe / Verrouillage': 'O-Securite-MotsDePasse → politique de mots de passe',
@@ -5719,6 +5742,9 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
   <div class="sb-logo">
     <h1>🐙 GPOctopus</h1>
     <p>{{ data.generated_at }} · {{ data.gpo_count }} GPO</p>
+    <button id="global-back-btn" onclick="goBack()" title="Retour" style="display:none;margin-top:8px;width:100%;align-items:center;justify-content:center;gap:6px;padding:6px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--txt2);font-size:12px;cursor:pointer">
+      <span>←</span> <span class="back-label">Retour</span>
+    </button>
   </div>
 
   <div class="sb-score">
@@ -5831,7 +5857,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       </div>
 
       <!-- Bandeau GPO par défaut -->
-      {% if data.default_gpo_status %}
+      {% if data.default_gpo_status | selectattr('severity', 'eq', 'warning') | list %}
       <div style="margin-bottom:20px">
         <div class="section-title">🛡 GPO par défaut Windows</div>
         <div style="display:flex;flex-direction:column;gap:10px">
@@ -5949,15 +5975,6 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
             </div>
           </div>
 
-          {% else %}
-          <!-- GPO non modifiée -->
-          <div style="background:var(--green-bg);border:1px solid rgba(58,158,114,.25);border-left:4px solid var(--green);border-radius:8px;padding:12px 18px;display:flex;align-items:center;gap:12px">
-            <span style="font-size:18px">✅</span>
-            <div>
-              <div style="font-size:13px;font-weight:600;color:var(--green)">{{ f.title }}</div>
-              <div style="font-size:11px;color:var(--txt2);margin-top:2px">{{ f.detail }}</div>
-            </div>
-          </div>
           {% endif %}
 
           {% endfor %}
@@ -5968,55 +5985,6 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <!-- Score par catégorie style PingCastle -->
       <div style="margin-bottom:24px">
 
-      <!-- GPO fourre-tout -->
-      {% if data.catchall_gpos %}
-      <div style="margin-bottom:20px">
-        <div class="section-title">🗂 GPO fourre-tout détectées
-          <span class="st-count">{{ data.catchall_gpos|length }}</span>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          {% for g in data.catchall_gpos %}
-          <div style="background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--amber);border-radius:8px;overflow:hidden">
-            <div style="padding:12px 16px;display:flex;align-items:center;gap:12px;cursor:pointer" onclick="this.nextElementSibling.classList.toggle('open')">
-              <span style="font-size:16px">📦</span>
-              <div style="flex:1;min-width:0">
-                <div style="font-size:13px;font-weight:600;color:var(--txt)" onclick="event.stopPropagation();openGPODetail('{{ g.gpo_guid }}')">{{ g.gpo_name }}</div>
-                <div style="font-size:11px;color:var(--txt3);margin-top:2px">
-                  {{ g.cat_count }} catégories mélangées :
-                  {% for cat in g.categories %}<span style="display:inline-block;margin:1px 3px 1px 0;padding:1px 7px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;font-size:10px;color:var(--txt2)">{{ cat }}</span>{% endfor %}
-                </div>
-              </div>
-              <span style="font-size:11px;color:var(--amber);flex-shrink:0">Voir suggestions ▼</span>
-            </div>
-            <div style="display:none;padding:14px 16px;border-top:1px solid var(--border);background:var(--surface2)" class="migration-body">
-              <div style="font-size:12px;color:var(--txt2);margin-bottom:12px;line-height:1.6">
-                <strong style="color:var(--txt)">Pourquoi c'est un problème ?</strong><br>
-                Une GPO avec trop de rôles différents est difficile à documenter, auditer et dépanner.
-                Si un paramètre cause un problème, difficile de savoir quelle GPO est en cause.
-                La bonne pratique est <strong>une GPO = un rôle</strong>.
-              </div>
-              {% if g.suggestions %}
-              <div style="font-size:12px;font-weight:600;color:var(--txt);margin-bottom:8px">💡 Découpage suggéré :</div>
-              <div style="display:flex;flex-direction:column;gap:5px">
-                {% for s in g.suggestions %}
-                <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--surface);border:1px solid var(--border);border-radius:5px">
-                  <span style="color:var(--blue);font-size:12px">→</span>
-                  <span style="font-size:12px;font-family:'JetBrains Mono',monospace;color:var(--txt2)">{{ s }}</span>
-                </div>
-                {% endfor %}
-              </div>
-              {% endif %}
-              {% if g.links %}
-              <div style="margin-top:10px;font-size:11px;color:var(--txt3)">
-                Liée à : {% for l in g.links[:3] %}<span style="color:var(--txt2)">{{ l.ou }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
-              </div>
-              {% endif %}
-            </div>
-          </div>
-          {% endfor %}
-        </div>
-      </div>
-      {% endif %}
         <div class="section-title">📊 Score de risque par domaine
           <span class="st-count" style="font-size:11px;color:var(--txt3);font-weight:400">0 = sûr · 100 = risque maximal · le pire détermine le score global</span>
         </div>
@@ -6140,7 +6108,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <h2>🔴 Constatations critiques</h2>
       <p>{{ data.criticals }} problème(s) à corriger en priorité</p>
     </div>
-    <div class="content-area">
+    <div class="content-area"><button onclick="goBack()" style="margin-bottom:16px;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--txt2);font-size:12px;cursor:pointer">← Retour</button>
       <div class="toolbar">
         <div class="search-mini"><span class="si">⌕</span><input type="text" placeholder="Filtrer…" oninput="filterFindingsSub(this.value,'critical')"></div>
         <select class="gpo-source-select" id="gpo-sel-critical" onchange="filtFByGPO(this.value,'critical')">
@@ -6188,7 +6156,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <h2>🟡 Alertes</h2>
       <p>{{ data.warnings }} alerte(s) à surveiller</p>
     </div>
-    <div class="content-area">
+    <div class="content-area"><button onclick="goBack()" style="margin-bottom:16px;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--txt2);font-size:12px;cursor:pointer">← Retour</button>
       <div class="toolbar">
         <div class="search-mini"><span class="si">⌕</span><input type="text" placeholder="Filtrer…" oninput="filterFindingsSub(this.value,'warning')"></div>
         <select class="gpo-source-select" onchange="filtFByGPO(this.value,'warning')">
@@ -6226,7 +6194,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <h2>✅ Paramètres conformes</h2>
       <p>Ces paramètres sont correctement configurés dans vos GPO</p>
     </div>
-    <div class="content-area">
+    <div class="content-area"><button onclick="goBack()" style="margin-bottom:16px;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--txt2);font-size:12px;cursor:pointer">← Retour</button>
       <div class="finding-list">
         {% for r in data.compliant_rules %}
         <div class="finding-card good">
@@ -6262,7 +6230,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <h2>⚡ Conflits GPO</h2>
       <p>Même paramètre configuré différemment dans plusieurs GPO — la GPO de priorité la plus haute gagne</p>
     </div>
-    <div class="content-area">
+    <div class="content-area"><button onclick="goBack()" style="margin-bottom:16px;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--txt2);font-size:12px;cursor:pointer">← Retour</button>
       <div class="info-box">Un conflit = deux GPO définissent la même clé avec des valeurs différentes. La <strong>GPO gagnante</strong> est celle liée à l'OU la plus profonde ou marquée Enforced.</div>
       <div class="toolbar">
         <button class="filter-btn on" onclick="filtConflicts('all',this)">Tous ({{ data.conflicts_high + data.conflicts_low }})</button>
@@ -6297,7 +6265,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <h2>◌ GPO orphelines</h2>
       <p>Non liées à une OU — inutiles ou dangereuses selon leur contenu</p>
     </div>
-    <div class="content-area">
+    <div class="content-area"><button onclick="goBack()" style="margin-bottom:16px;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--txt2);font-size:12px;cursor:pointer">← Retour</button>
       {% if data.orphan_gpos %}
       <div class="info-box">Ces GPO existent mais ne s'appliquent sur aucune OU. Vérifiez si elles doivent être supprimées ou liées.</div>
       {% for name in data.orphan_gpos %}
@@ -6385,7 +6353,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <h2>≡ Toutes les GPO</h2>
       <p>Cliquez sur une GPO pour voir tous ses paramètres et ses findings</p>
     </div>
-    <div class="content-area">
+    <div class="content-area"><button onclick="goBack()" style="margin-bottom:16px;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--txt2);font-size:12px;cursor:pointer">← Retour</button>
       <div class="toolbar">
         <div class="search-mini"><span class="si">⌕</span><input type="text" placeholder="Rechercher une GPO…" oninput="searchGPOList(this.value)"></div>
         <button class="filter-btn on" onclick="filtGPO('all',this)">Toutes</button>
@@ -6403,7 +6371,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <h2>⏱ Timeline des modifications</h2>
       <p>Identifiez ce qui a changé récemment — utile quand un problème est apparu à une date précise</p>
     </div>
-    <div class="content-area">
+    <div class="content-area"><button onclick="goBack()" style="margin-bottom:16px;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--txt2);font-size:12px;cursor:pointer">← Retour</button>
       <div class="toolbar">
         <button class="filter-btn on" onclick="filterTimeline('all',this)">Tout</button>
         <button class="filter-btn" onclick="filterTimeline(7,this)">7 jours</button>
@@ -6438,7 +6406,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <h2>⊢ Inventaire par OU</h2>
       <p>Quelles GPO s'appliquent sur quelle OU — dans l'ordre de priorité Windows réel</p>
     </div>
-    <div class="content-area">
+    <div class="content-area"><button onclick="goBack()" style="margin-bottom:16px;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--txt2);font-size:12px;cursor:pointer">← Retour</button>
       <div class="toolbar">
         <div class="search-mini"><span class="si">⌕</span><input type="text" placeholder="Filtrer par OU…" oninput="searchOU(this.value)"></div>
       </div>
@@ -6452,7 +6420,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       <h2>◫ Inventaire par type de configuration</h2>
       <p>Imprimantes, lecteurs réseau, scripts, tâches… combien de GPO configurent chaque type</p>
     </div>
-    <div class="content-area">
+    <div class="content-area"><button onclick="goBack()" style="margin-bottom:16px;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--txt2);font-size:12px;cursor:pointer">← Retour</button>
       <div id="type-grid-area"></div>
       <div id="type-detail-area"></div>
     </div>
@@ -6518,8 +6486,50 @@ window.addEventListener('DOMContentLoaded', () => {
 let _currentTab = 'security';
 let _currentSub = { security:'overview', diag:'search', inventory:'byou' };
 let _prevSub = null; // pour le retour depuis GPO détail
+let _navStack = [];  // pile de navigation complète
 
-function switchTab(tab) {
+function _pushNav() {
+  _navStack.push({tab: _currentTab, sub: _currentSub[_currentTab]});
+  if(_navStack.length > 20) _navStack.shift();
+  _updateBackBtn();
+}
+
+function _updateBackBtn() {
+  const btn = document.getElementById('global-back-btn');
+  if(!btn) return;
+  if(_navStack.length > 0) {
+    btn.style.display = 'flex';
+    const prev = _navStack[_navStack.length - 1];
+    const labels = {
+      'security-overview': 'Vue d\'ensemble',
+      'security-critical': 'Critiques',
+      'security-warnings': 'Alertes',
+      'security-compliant': 'Conformes',
+      'security-conflicts': 'Conflits',
+      'security-orphans': 'Orphelines',
+      'diag-search': 'Recherche',
+      'diag-gpolist': 'Toutes les GPO',
+      'diag-timeline': 'Timeline',
+      'inventory-byou': 'Par OU',
+      'inventory-bytype': 'Par type',
+    };
+    const key = prev.tab + '-' + prev.sub;
+    btn.querySelector('.back-label').textContent = labels[key] || prev.sub;
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+function goBack() {
+  if(_navStack.length === 0) return;
+  const prev = _navStack.pop();
+  _updateBackBtn();
+  switchTab(prev.tab, true);
+  showSub(prev.tab, prev.sub, true);
+}
+
+function switchTab(tab, skipHistory) {
+  if(!skipHistory) _pushNav();
   // Désactiver tous les onglets
   document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.main-tab').forEach(b=>b.classList.remove('active'));
@@ -6530,10 +6540,11 @@ function switchTab(tab) {
   document.getElementById('subnav-'+tab).style.display='';
 
   _currentTab = tab;
-  showSub(tab, _currentSub[tab]);
+  showSub(tab, _currentSub[tab], true);
 }
 
-function showSub(tab, sub) {
+function showSub(tab, sub, skipHistory) {
+  if(!skipHistory) _pushNav();
   // Cacher toutes les sous-vues du tab
   const tabEl = document.getElementById('tab-'+tab);
   tabEl.querySelectorAll('[id^="sub-'+tab+'-"]').forEach(el=>el.style.display='none');
@@ -6556,19 +6567,22 @@ function showSub(tab, sub) {
 }
 
 function openGPODetail(guid) {
+  _pushNav();
   _prevSub = {tab:_currentTab, sub:_currentSub[_currentTab]};
-  if(_currentTab !== 'diag') switchTab('diag');
-  showSub('diag','gpodetail');
+  if(_currentTab !== 'diag') switchTab('diag', true);
+  showSub('diag','gpodetail', true);
   renderGPODetail(guid);
 }
 
 function goBackFromDetail() {
-  if(_prevSub) {
-    switchTab(_prevSub.tab);
-    showSub(_prevSub.tab, _prevSub.sub);
+  if(_navStack.length > 0) {
+    goBack();
+  } else if(_prevSub) {
+    switchTab(_prevSub.tab, true);
+    showSub(_prevSub.tab, _prevSub.sub, true);
     _prevSub = null;
   } else {
-    showSub('diag','gpolist');
+    showSub('diag','gpolist', true);
   }
 }
 
