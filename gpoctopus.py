@@ -860,10 +860,127 @@ AUDIT_RULES_REGISTRY_XML = [
         "operator": "eq",
         "remediation": "EnableScriptBlockLogging = 1. Journalise tout le code PowerShell exécuté (Event ID 4104). Indispensable pour détecter les attaques PowerShell.",
     },
+    {
+        "id": "REGXML-008",
+        "title": "Pare-feu Windows désactivé — profil standard/privé",
+        "severity": "critical",
+        "ref": "CIS 9.2.1 · ANSSI R-11",
+        "category": "Services & Composants système",
+        "hive_key": "hklm\\software\\policies\\microsoft\\windowsfirewall\\standardprofile",
+        "name": "enablefirewall",
+        "bad_int": 0,
+        "operator": "eq",
+        "remediation": (
+            "EnableFirewall = 1 pour le profil Standard.\n"
+            "Le profil Standard s'applique hors du domaine (WiFi public, télétravail).\n"
+            "Le désactiver expose les postes nomades sans aucune protection réseau.\n\n"
+            "📍 Chemin GPO :\nConfiguration ordinateur → Préférences → Registre\n"
+            "  Ruche : HKEY_LOCAL_MACHINE\n"
+            "  Chemin : SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\StandardProfile\n"
+            "  Valeur : EnableFirewall = 1"
+        ),
+    },
+    {
+        "id": "REGXML-009",
+        "title": "Windows Defender désactivé via préférences registre (DisableAntiSpyware = 1)",
+        "severity": "critical",
+        "ref": "CIS 18.9.47.4 · ANSSI R-13 · MS Baseline v22H2",
+        "category": "Services & Composants système",
+        "hive_key": "hklm\\software\\policies\\microsoft\\windows defender",
+        "name": "disableantispyware",
+        "bad_int": 1,
+        "operator": "eq",
+        "remediation": (
+            "DisableAntiSpyware = 0 (ou supprimer la clé).\n"
+            "Windows Defender désactivé via GPO = aucune protection antivirus sur le parc.\n"
+            "Cette clé est souvent posée par des malwares ou des admins qui déploient un autre AV\n"
+            "sans vérifier la désactivation propre de Defender.\n\n"
+            "📍 Chemin GPO :\nConfiguration ordinateur → Préférences → Registre\n"
+            "  Ruche : HKEY_LOCAL_MACHINE\n"
+            "  Chemin : SOFTWARE\\Policies\\Microsoft\\Windows Defender\n"
+            "  Valeur : DisableAntiSpyware = 0"
+        ),
+    },
+    {
+        "id": "REGXML-010",
+        "title": "Protection temps réel Defender désactivée (DisableRealtimeMonitoring = 1)",
+        "severity": "critical",
+        "ref": "CIS 18.9.47.9 · ANSSI R-13",
+        "category": "Services & Composants système",
+        "hive_key": "hklm\\software\\policies\\microsoft\\windows defender\\real-time protection",
+        "name": "disablerealtimemonitoring",
+        "bad_int": 1,
+        "operator": "eq",
+        "remediation": (
+            "DisableRealtimeMonitoring = 0.\n"
+            "La protection temps réel est la défense principale de Defender.\n"
+            "Sans elle, les fichiers malveillants ne sont pas scannés à l'exécution.\n\n"
+            "📍 Chemin GPO :\nConfiguration ordinateur → Préférences → Registre\n"
+            "  Ruche : HKEY_LOCAL_MACHINE\n"
+            "  Chemin : SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection\n"
+            "  Valeur : DisableRealtimeMonitoring = 0"
+        ),
+    },
+    {
+        "id": "REGXML-011",
+        "title": "Surveillance comportementale Defender désactivée",
+        "severity": "warning",
+        "ref": "CIS 18.9.47.9 · ANSSI R-13",
+        "category": "Services & Composants système",
+        "hive_key": "hklm\\software\\policies\\microsoft\\windows defender\\real-time protection",
+        "name": "disablebehaviormonitoring",
+        "bad_int": 1,
+        "operator": "eq",
+        "remediation": (
+            "DisableBehaviorMonitoring = 0.\n"
+            "La surveillance comportementale détecte les comportements suspects même sans signature.\n"
+            "La désactiver réduit significativement la capacité de détection des menaces avancées.\n\n"
+            "📍 Chemin GPO :\nConfiguration ordinateur → Préférences → Registre\n"
+            "  Ruche : HKEY_LOCAL_MACHINE\n"
+            "  Chemin : SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection\n"
+            "  Valeur : DisableBehaviorMonitoring = 0"
+        ),
+    },
+    {
+        "id": "REGXML-012",
+        "title": "NLA (Network Level Auth) RDP désactivé via préférences registre",
+        "severity": "critical",
+        "ref": "CIS 18.9.65.3.9 · ANSSI R-12 · MS Baseline v22H2",
+        "category": "Accès à distance",
+        "hive_key": "hklm\\software\\policies\\microsoft\\windows nt\\terminal services",
+        "name": "userauthentication",
+        "bad_int": 0,
+        "operator": "eq",
+        "remediation": (
+            "UserAuthentication = 1 (NLA requis).\n"
+            "NLA force l'authentification AD avant d'établir la session RDP.\n"
+            "Sans NLA, les vulnérabilités pré-authentification RDP (BlueKeep CVE-2019-0708) sont exploitables.\n\n"
+            "📍 Chemin GPO :\nConfiguration ordinateur → Préférences → Registre\n"
+            "  Ruche : HKEY_LOCAL_MACHINE\n"
+            "  Chemin : SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services\n"
+            "  Valeur : UserAuthentication = 1"
+        ),
+    },
+    {
+        "id": "REGXML-013",
+        "title": "Chiffrement RDP insuffisant via préférences registre (MinEncryptionLevel < 3)",
+        "severity": "warning",
+        "ref": "CIS 18.9.65.3.3 · ANSSI R-12",
+        "category": "Accès à distance",
+        "hive_key": "hklm\\software\\policies\\microsoft\\windows nt\\terminal services",
+        "name": "minencryptionlevel",
+        "bad_int": 3,
+        "operator": "lt",
+        "remediation": (
+            "MinEncryptionLevel = 3 (Élevé) ou 4 (FIPS).\n"
+            "Niveaux : 1=Faible, 2=Compatible client, 3=Élevé (recommandé), 4=FIPS.\n\n"
+            "📍 Chemin GPO :\nConfiguration ordinateur → Préférences → Registre\n"
+            "  Ruche : HKEY_LOCAL_MACHINE\n"
+            "  Chemin : SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services\n"
+            "  Valeur : MinEncryptionLevel = 3"
+        ),
+    },
 ]
-
-
-# ─── Règles sur les [Privilege Rights] du GptTmpl.inf ───────────────────────
 AUDIT_RULES_PRIVRIGHTS = [
     {
         "id": "PRIV-R001",
@@ -920,6 +1037,63 @@ AUDIT_RULES_PRIVRIGHTS = [
 
 def evaluate_privright_rules(privright_settings: dict) -> list:
     """Évalue les règles Privilege Rights depuis [Privilege Rights] de GptTmpl.inf."""
+
+    # Table de résolution SID → nom lisible (SIDs courants Windows)
+    SID_NAMES = {
+        's-1-5-32-544':  'Administrateurs',
+        's-1-5-32-545':  'Utilisateurs',
+        's-1-5-32-546':  'Invités',
+        's-1-5-32-547':  'Utilisateurs avec pouvoirs',
+        's-1-5-32-548':  'Opérateurs de compte',
+        's-1-5-32-549':  'Opérateurs de serveur',
+        's-1-5-32-550':  'Opérateurs d\'impression',
+        's-1-5-32-551':  'Opérateurs de sauvegarde',
+        's-1-5-32-552':  'Réplicateurs',
+        's-1-5-32-554':  'Accès compatible pré-Win2000',
+        's-1-5-32-555':  'Utilisateurs du Bureau à distance',
+        's-1-5-32-556':  'Opérateurs réseau de configuration',
+        's-1-5-32-557':  'Créateurs de confiance entrants',
+        's-1-5-32-558':  'Utilisateurs du moniteur de performance',
+        's-1-5-32-559':  'Utilisateurs du journal des perf.',
+        's-1-5-32-560':  'Accès auth. Windows',
+        's-1-5-32-561':  'Utilisateurs du journal des événements',
+        's-1-5-32-562':  'Accès COM distribué',
+        's-1-5-32-569':  'Opérateurs de chiffrement',
+        's-1-5-32-573':  'Lecteurs du journal des événements',
+        's-1-5-32-574':  'Propriétaires du certificat',
+        's-1-5-32-575':  'Utilisateurs de la stratégie RDS',
+        's-1-5-32-576':  'Serveurs d\'accès à distance RDS',
+        's-1-5-32-577':  'Serveurs de virtualisation RDS',
+        's-1-5-32-578':  'Administrateurs Hyper-V',
+        's-1-5-32-579':  'Opérateurs d\'accès auth.',
+        's-1-5-32-580':  'Utilisateurs DCOM gérés',
+        's-1-5-4':       'Service interactif',
+        's-1-5-6':       'Service',
+        's-1-5-9':       'Contrôleurs de domaine d\'entreprise',
+        's-1-5-11':      'Utilisateurs authentifiés',
+        's-1-5-18':      'Système local',
+        's-1-5-19':      'Service local',
+        's-1-5-20':      'Service réseau',
+        's-1-5-21':      '(Compte de domaine)',
+        's-1-1-0':       'Tout le monde',
+        's-1-2-0':       'Local',
+        's-1-3-0':       'Créateur propriétaire',
+        's-1-5-7':       'Utilisateur anonyme',
+    }
+
+    def _resolve_sid(sid_raw: str) -> str:
+        """Résout un SID en nom lisible. Format entrée : *S-1-5-32-544 ou S-1-5-32-544"""
+        clean = sid_raw.strip().lstrip('*').lower()
+        # Tenter une correspondance exacte
+        if clean in SID_NAMES:
+            return SID_NAMES[clean]
+        # Tenter une correspondance de préfixe (comptes de domaine)
+        for k, v in SID_NAMES.items():
+            if clean.startswith(k + '-') or clean == k:
+                return v
+        # Retourner le SID brut si non résolu
+        return sid_raw.strip().lstrip('*')
+
     findings = []
     if not privright_settings:
         return findings
@@ -930,17 +1104,24 @@ def evaluate_privright_rules(privright_settings: dict) -> list:
             continue
         assigned = {v.strip().lower() for v in raw.split(',') if v.strip()}
         violated = False
-        detail = f"Droit accordé à : {raw}"
+        detail = ""
         if rule.get("empty_only"):
             if assigned:
                 violated = True
-                detail = f"Droit non vide — accordé à : {raw}"
+                # Résoudre les SIDs pour l'affichage
+                names = [_resolve_sid(v) for v in raw.split(',') if v.strip()]
+                detail = f"Droit accordé à : {', '.join(names)}"
         elif "allowed_groups" in rule:
             allowed = {g.lower() for g in rule["allowed_groups"]}
             extra = assigned - allowed
             if extra:
                 violated = True
-                detail = f"Groupes non autorisés : {', '.join(sorted(extra))}"
+                # Résoudre les SIDs non autorisés
+                names = [_resolve_sid(v) for v in raw.split(',')
+                         if v.strip() and v.strip().lower() not in allowed]
+                all_names = [_resolve_sid(v) for v in raw.split(',') if v.strip()]
+                detail = (f"Droits accordés à : {', '.join(all_names)}\n"
+                          f"Comptes non autorisés : {', '.join(names)}")
         if violated:
             findings.append({
                 "rule_id":     rule["id"],
@@ -2196,7 +2377,43 @@ def detect_gpo_conflicts(gpos: list) -> list:
                 )
                 _add('registry_xml', full, str(entry.get('value', '')), gpo)
 
-    # ── Analyser les conflits ──
+    # Table d'évaluation sécurité des contradictions
+    # (section, key_short) → {valeur_sure, comparateur, label_recommande}
+    SECURITY_EVAL = {
+        ('system_access',  'lmcompatibilitylevel'):   {'safe_op': 'gte', 'safe_val': 5, 'label': 'NTLMv2 uniquement (≥ 5)'},
+        ('system_access',  'nolmhash'):               {'safe_op': 'eq',  'safe_val': 1, 'label': 'Ne pas stocker hash LM (= 1)'},
+        ('system_access',  'restrictanonymous'):      {'safe_op': 'gte', 'safe_val': 1, 'label': 'Restreindre anonymes (≥ 1)'},
+        ('system_access',  'enableguestaccount'):     {'safe_op': 'eq',  'safe_val': 0, 'label': 'Compte Invité désactivé (= 0)'},
+        ('system_access',  'lockoutbadcount'):        {'safe_op': 'lte_nonzero', 'safe_val': 10, 'label': 'Verrouillage ≤ 10 tentatives'},
+        ('password_policy','minimumpasswordlength'):  {'safe_op': 'gte', 'safe_val': 14, 'label': 'Longueur minimale ≥ 14'},
+        ('password_policy','passwordcomplexity'):     {'safe_op': 'eq',  'safe_val': 1,  'label': 'Complexité activée (= 1)'},
+        ('password_policy','passwordhistorysize'):    {'safe_op': 'gte', 'safe_val': 24, 'label': 'Historique ≥ 24'},
+        ('registry_pol',   'uselogoncredential'):     {'safe_op': 'eq',  'safe_val': 0,  'label': 'WDigest désactivé (= 0)'},
+        ('registry_pol',   'smb1'):                   {'safe_op': 'eq',  'safe_val': 0,  'label': 'SMBv1 désactivé (= 0)'},
+        ('registry_pol',   'enablefirewall'):         {'safe_op': 'eq',  'safe_val': 1,  'label': 'Pare-feu activé (= 1)'},
+        ('registry_pol',   'enablelua'):              {'safe_op': 'eq',  'safe_val': 1,  'label': 'UAC activé (= 1)'},
+        ('registry_pol',   'enablescriptblocklogging'): {'safe_op': 'eq', 'safe_val': 1, 'label': 'ScriptBlock Logging activé (= 1)'},
+        ('registry_pol',   'nolargelogfilewarning'):  {'safe_op': 'eq',  'safe_val': 0,  'label': ''},
+        ('event_audit',    'auditlogonevents'):       {'safe_op': 'gte', 'safe_val': 3,  'label': 'Audit connexions Succès+Échec (≥ 3)'},
+        ('event_audit',    'auditaccountmanage'):     {'safe_op': 'gte', 'safe_val': 3,  'label': 'Audit gestion comptes Succès+Échec (≥ 3)'},
+    }
+
+    def _is_safe_value(section, key_short, val_str) -> bool | None:
+        """Retourne True si la valeur est sûre, False si dangereuse, None si inconnu."""
+        rule = SECURITY_EVAL.get((section, key_short))
+        if not rule:
+            return None
+        try:
+            v = int(val_str.split(',')[-1].strip())
+        except (ValueError, TypeError):
+            return None
+        op = rule['safe_op']
+        sv = rule['safe_val']
+        if op == 'eq':     return v == sv
+        if op == 'gte':    return v >= sv
+        if op == 'lte':    return v <= sv
+        if op == 'lte_nonzero': return 0 < v <= sv
+        return None
     conflicts = []
     for (section, key), entries in param_index.items():
         if len(entries) < 2:
@@ -2227,6 +2444,34 @@ def detect_gpo_conflicts(gpos: list) -> list:
         enforced_entries = [e for e in unique_entries if e['enforced']]
         winner = enforced_entries[-1] if enforced_entries else unique_entries[-1]
         losers = [e for e in unique_entries if e['gpo_guid'] != winner['gpo_guid']]
+
+        # Évaluer si le conflit est une contradiction de sécurité
+        # (une valeur sûre vs une valeur dangereuse)
+        key_short = key.split('\\')[-1].lower()
+        sec_rule = SECURITY_EVAL.get((section, key_short))
+        contradiction = None
+        safe_gpo = None
+        unsafe_gpos = []
+        if sec_rule:
+            for e in unique_entries:
+                is_safe = _is_safe_value(section, key_short, e['value'])
+                if is_safe is True:
+                    safe_gpo = e
+                elif is_safe is False:
+                    unsafe_gpos.append(e)
+            if safe_gpo and unsafe_gpos:
+                contradiction = {
+                    'label':       sec_rule['label'],
+                    'safe_gpo':    safe_gpo['gpo_name'],
+                    'safe_val':    safe_gpo['value'],
+                    'unsafe_gpos': [{'name': u['gpo_name'], 'value': u['value']} for u in unsafe_gpos],
+                    'danger':      f"La GPO '{safe_gpo['gpo_name']}' sécurise ce paramètre "
+                                   f"mais {'une autre GPO la contredit' if len(unsafe_gpos)==1 else str(len(unsafe_gpos))+' autres GPO la contredisent'} — "
+                                   f"si ces GPO ont une priorité plus haute, le paramètre dangereux s'applique.",
+                }
+                # Élever la sévérité si c'est une vraie contradiction de sécurité
+                is_security = True
+                severity = 'conflict_high'
 
         # Niveau de criticité du conflit
         key_short = key.split('\\')[-1].lower()
@@ -2268,6 +2513,7 @@ def detect_gpo_conflicts(gpos: list) -> list:
             'losers':          [_slim(l) for l in losers],
             'enforced_wins':   bool(enforced_entries),
             'gpo_count':       len(unique_entries),
+            'contradiction':   contradiction,
             'label':           f"{section_label} → {key_short}",
         })
 
@@ -2639,6 +2885,17 @@ def build_rsop(gpos: list) -> tuple[dict, list]:
         # Ignorer les GPO entièrement désactivées
         if is_gpo_fully_disabled(gpo):
             continue
+
+        # Ignorer les GPO dont TOUS les liens sont désactivés
+        links = gpo.get('links', [])
+        if links and all(l.get('disabled') for l in links):
+            continue
+
+        # Note sur le Security Filtering : si une GPO a un Security Filtering
+        # restrictif (ne s'applique pas à "Authenticated Users"), elle ne
+        # s'applique pas à tous les postes. On l'inclut quand même dans le RSOP
+        # global MAIS on annotera les findings correspondants avec scope_note.
+        # (La vérification est faite dans la partie "enrichissement des findings")
 
         # Fusionner les settings (dernier gagne = priorité la plus haute)
         for section, params in gpo.get('settings', {}).items():
@@ -3844,6 +4101,31 @@ def _format_gpo_content(gpo: dict) -> list:
         params = []
         for k, v in sorted(params_raw.items()):
             label, hint = _LABELS.get(k, (k, ''))
+            # Pour privilege_rights : résoudre les SIDs en noms lisibles
+            display_v = v
+            if sec_key == 'privilege_rights' and v:
+                resolved = []
+                for sid_raw in v.split(','):
+                    sid_raw = sid_raw.strip()
+                    if not sid_raw:
+                        continue
+                    clean = sid_raw.lstrip('*').lower()
+                    _SID_NAMES = {
+                        's-1-5-32-544':'Administrateurs','s-1-5-32-545':'Utilisateurs',
+                        's-1-5-32-546':'Invités','s-1-5-32-551':'Opérateurs de sauvegarde',
+                        's-1-5-32-555':'Utilisateurs Bureau à distance',
+                        's-1-5-11':'Utilisateurs authentifiés','s-1-5-18':'Système local',
+                        's-1-5-19':'Service local','s-1-5-20':'Service réseau',
+                        's-1-1-0':'Tout le monde','s-1-5-4':'Service interactif',
+                        's-1-5-6':'Service','s-1-5-9':'Contrôleurs de domaine',
+                        's-1-3-0':'Créateur propriétaire',
+                    }
+                    name = _SID_NAMES.get(clean, sid_raw)
+                    # Comptes de domaine (SID long) — on garde le SID mais sans le *
+                    if name == sid_raw and sid_raw.startswith('*'):
+                        name = sid_raw[1:]  # retirer le * mais garder le SID
+                    resolved.append(name)
+                display_v = ', '.join(resolved)
             # Détecter les valeurs problématiques
             alert = None
             try:
@@ -3864,7 +4146,7 @@ def _format_gpo_content(gpo: dict) -> list:
                     alert = 'Compte Invité activé'
             except (ValueError, TypeError):
                 pass
-            params.append({'key': k, 'value': v, 'label': label, 'hint': hint, 'alert': alert})
+            params.append({'key': k, 'value': display_v, 'label': label, 'hint': hint, 'alert': alert})
         if params:
             sections.append({'title': sec_label, 'icon': '🔒', 'params': params})
 
@@ -4657,6 +4939,81 @@ def detect_catchall_gpos(gpos: list) -> list:
     return findings
 
 
+
+    # Poids par règle (points de risque ajoutés au score de la catégorie)
+# Plafond par catégorie : 100 pts max
+RULE_WEIGHTS = {
+    # ── Authentification — vulnérabilités critiques d'auth réseau ──────────
+    'AUTH-001': 100,  # Hash LM stocké — cassé en secondes (rainbow tables)
+    'AUTH-002': 100,  # NTLMv1 autorisé — capturé et craqué facilement
+    'AUTH-003':  30,  # Pas de verrouillage — brute-force illimité
+    'AUTH-004':  15,  # Verrouillage trop court
+    # ── Mots de passe ──────────────────────────────────────────────────────
+    'PWD-001':   40,  # Longueur < 14 — craquable
+    'PWD-002':   25,  # Historique court — réutilisation cyclique
+    'PWD-003':   50,  # Pas de complexité — dictionnaire trivial
+    'PWD-004':   20,  # Durée illimitée ou excessive
+    'PWD-005':    5,  # Avertissement trop court
+    'PWD-006':   15,  # Durée minimale = 0 — contourne l'historique
+    # ── Système — exposition mémoire et protocoles ─────────────────────────
+    'SYS-001': 100,  # WDigest — mots de passe en clair dans lsass
+    'SYS-002':  70,  # SMBv1 — EternalBlue/WannaCry
+    'SYS-003':  40,  # Pare-feu désactivé
+    'SYS-004':  20,  # AutoRun actif — USB malveillante
+    'SYS-005':  10,  # Credential Guard absent
+    # ── UAC & Élévation ────────────────────────────────────────────────────
+    'UAC-001': 100,  # UAC désactivé — escalade silencieuse
+    'UAC-002':  80,  # Admins sans demande UAC
+    'UAC-003':  25,  # Compte admin intégré non filtré
+    'UAC-004':  80,  # Token plein comptes locaux — Pass-the-Hash
+    # ── Protocoles réseau ──────────────────────────────────────────────────
+    'SMB-001':  35,  # Signature SMB non requise — relay MITM
+    'LDAP-001': 80,  # Intégrité LDAP désactivée — LDAP relay
+    'LDAP-002': 20,  # LDAP pas au niveau max
+    'NTLM-001': 30,  # Trafic NTLM sortant non restreint
+    'RDP-001':  40,  # NLA non requis — BlueKeep
+    # ── Impression ────────────────────────────────────────────────────────
+    'PRINT-001': 90, # PrintNightmare — installation drivers non restreinte
+    # ── LSA & Protection mémoire ───────────────────────────────────────────
+    'LSA-001':  30,  # RunAsPPL non activé — Mimikatz
+    # ── Accès anonyme ──────────────────────────────────────────────────────
+    'PRIV-001': 50,  # Accès réseau anonyme autorisé
+    'PRIV-002': 15,  # Compte Invité activé
+    'ANON-001': 25,  # Everyone inclut anonymes
+    'ANON-002': 25,  # Partages accessibles anonymement
+    # ── Audit ─────────────────────────────────────────────────────────────
+    'AUDIT-001': 25,  # Audit connexions absent
+    'AUDIT-002': 20,  # Audit gestion comptes absent
+    'AUDIT-003': 20,  # Audit changements stratégie absent
+    'AUDIT-005': 10,  # Audit avancé non prioritaire
+    'AUDIT-006': 10,  # Audit privilèges absent
+    'AUDIT-007': 10,  # Audit événements système absent
+    'LOG-001':   15,  # Journal sécurité trop petit
+    # ── PowerShell ────────────────────────────────────────────────────────
+    'PS-001':   30,   # ScriptBlock Logging désactivé
+    # ── Kerberos ──────────────────────────────────────────────────────────
+    'KERB-002': 20,   # DES/RC4 non désactivé
+    # ── Droits utilisateurs dangereux ──────────────────────────────────────
+    'PRIV-R001': 100, # SeDebugPrivilege — Mimikatz direct
+    'PRIV-R002': 100, # SeTcbPrivilege — Act as OS
+    'PRIV-R003':  40, # SeTakeOwnership étendu
+    'PRIV-R004':  35, # SeBackupPrivilege étendu — exfiltration SAM
+    'PRIV-R005': 100, # SeLoadDriverPrivilege — driver malveillant Ring 0
+    # ── Préférences registre (Registry.xml) ────────────────────────────────
+    'REGXML-001': 100, # Partages admin activés — Pass-the-Hash trivial
+    'REGXML-002':  80, # Token plein comptes locaux
+    'REGXML-003': 100, # UAC désactivé via préférences
+    'REGXML-004': 100, # WDigest activé via préférences
+    'REGXML-005':  70, # SMBv1 activé via préférences
+    'REGXML-006':  40, # Pare-feu désactivé via préférences
+    'REGXML-007':  30, # ScriptBlock Logging désactivé via préférences
+    'REGXML-008': 100, # Pare-feu profil standard désactivé
+    'REGXML-009': 100, # Defender désactivé
+    'REGXML-010': 100, # Protection temps réel Defender désactivée
+    'REGXML-011':  60, # Surveillance comportementale Defender désactivée
+    'REGXML-012':  80, # NLA RDP désactivé via préférences
+    'REGXML-013':  30, # Chiffrement RDP insuffisant
+}
 def analyze_gpos(gpos: list) -> dict:
     if not gpos:
         print("[!] Aucune GPO collectée — vérifiez la connexion LDAP et les droits du compte.")
@@ -4945,10 +5302,17 @@ def analyze_gpos(gpos: list) -> dict:
                     'detail':     r.get('alert', ''),
                 })
 
-        score = 100
-        for f in per_gpo_findings:
-            score -= {'critical': 25, 'warning': 10, 'info': 3}.get(f['severity'], 0)
-        score = max(0, score)
+        # Score de risque par GPO — cohérent avec le score global PingCastle
+        # On utilise les mêmes poids que le score global.
+        # Score = 0 (sûr) → 100 (risque max), plafonné à 100.
+        # Seuls les findings confirmés (not_configured=False) comptent.
+        confirmed_per_gpo = [f for f in per_gpo_findings if not f.get('not_configured')]
+        gpo_risk = 0
+        for f in confirmed_per_gpo:
+            rid = f.get('rule_id', '')
+            weight = RULE_WEIGHTS.get(rid, {'critical': 30, 'warning': 15, 'info': 5}.get(f['severity'], 10))
+            gpo_risk += weight
+        score = min(100, gpo_risk)
 
         # Préparer le contenu lisible de la GPO
         content_sections = _format_gpo_content(gpo)
@@ -4961,6 +5325,19 @@ def analyze_gpos(gpos: list) -> dict:
             any(s['params'] for s in content_sections)
             or bool(gpo.get('registry_entries'))
             or bool(gpo.get('registry_entries_user'))
+            or bool(gpo.get('registry_admx'))
+            or bool(gpo.get('registry_admx_user'))
+            or bool(gpo.get('shortcuts_machine'))
+            or bool(gpo.get('shortcuts_user'))
+            or bool(gpo.get('regional'))
+            or bool(gpo.get('datasources_machine'))
+            or bool(gpo.get('datasources_user'))
+            or bool(gpo.get('network_options'))
+            or bool(gpo.get('ini_files_machine'))
+            or bool(gpo.get('ini_files_user'))
+            or bool(gpo.get('internet_settings'))
+            or bool(gpo.get('files_machine'))
+            or bool(gpo.get('files_user'))
             or any(
                 isinstance(v, list) and v
                 for v in (gpo.get('scripts') or {}).values()
@@ -5107,74 +5484,7 @@ def analyze_gpos(gpos: list) -> dict:
     # Inspiré de PingCastle : une seule faille critique suffit à avoir un mauvais score.
     # ══════════════════════════════════════════════════════════════════════════
 
-    # Poids par règle (points de risque ajoutés au score de la catégorie)
-    # Plafond par catégorie : 100 pts max
-    RULE_WEIGHTS = {
-        # ── Authentification — vulnérabilités critiques d'auth réseau ──────────
-        'AUTH-001': 100,  # Hash LM stocké — cassé en secondes (rainbow tables)
-        'AUTH-002': 100,  # NTLMv1 autorisé — capturé et craqué facilement
-        'AUTH-003':  30,  # Pas de verrouillage — brute-force illimité
-        'AUTH-004':  15,  # Verrouillage trop court
-        # ── Mots de passe ──────────────────────────────────────────────────────
-        'PWD-001':   40,  # Longueur < 14 — craquable
-        'PWD-002':   25,  # Historique court — réutilisation cyclique
-        'PWD-003':   50,  # Pas de complexité — dictionnaire trivial
-        'PWD-004':   20,  # Durée illimitée ou excessive
-        'PWD-005':    5,  # Avertissement trop court
-        'PWD-006':   15,  # Durée minimale = 0 — contourne l'historique
-        # ── Système — exposition mémoire et protocoles ─────────────────────────
-        'SYS-001': 100,  # WDigest — mots de passe en clair dans lsass
-        'SYS-002':  70,  # SMBv1 — EternalBlue/WannaCry
-        'SYS-003':  40,  # Pare-feu désactivé
-        'SYS-004':  20,  # AutoRun actif — USB malveillante
-        'SYS-005':  10,  # Credential Guard absent
-        # ── UAC & Élévation ────────────────────────────────────────────────────
-        'UAC-001': 100,  # UAC désactivé — escalade silencieuse
-        'UAC-002':  80,  # Admins sans demande UAC
-        'UAC-003':  25,  # Compte admin intégré non filtré
-        'UAC-004':  80,  # Token plein comptes locaux — Pass-the-Hash
-        # ── Protocoles réseau ──────────────────────────────────────────────────
-        'SMB-001':  35,  # Signature SMB non requise — relay MITM
-        'LDAP-001': 80,  # Intégrité LDAP désactivée — LDAP relay
-        'LDAP-002': 20,  # LDAP pas au niveau max
-        'NTLM-001': 30,  # Trafic NTLM sortant non restreint
-        'RDP-001':  40,  # NLA non requis — BlueKeep
-        # ── Impression ────────────────────────────────────────────────────────
-        'PRINT-001': 90, # PrintNightmare — installation drivers non restreinte
-        # ── LSA & Protection mémoire ───────────────────────────────────────────
-        'LSA-001':  30,  # RunAsPPL non activé — Mimikatz
-        # ── Accès anonyme ──────────────────────────────────────────────────────
-        'PRIV-001': 50,  # Accès réseau anonyme autorisé
-        'PRIV-002': 15,  # Compte Invité activé
-        'ANON-001': 25,  # Everyone inclut anonymes
-        'ANON-002': 25,  # Partages accessibles anonymement
-        # ── Audit ─────────────────────────────────────────────────────────────
-        'AUDIT-001': 25,  # Audit connexions absent
-        'AUDIT-002': 20,  # Audit gestion comptes absent
-        'AUDIT-003': 20,  # Audit changements stratégie absent
-        'AUDIT-005': 10,  # Audit avancé non prioritaire
-        'AUDIT-006': 10,  # Audit privilèges absent
-        'AUDIT-007': 10,  # Audit événements système absent
-        'LOG-001':   15,  # Journal sécurité trop petit
-        # ── PowerShell ────────────────────────────────────────────────────────
-        'PS-001':   30,   # ScriptBlock Logging désactivé
-        # ── Kerberos ──────────────────────────────────────────────────────────
-        'KERB-002': 20,   # DES/RC4 non désactivé
-        # ── Droits utilisateurs dangereux ──────────────────────────────────────
-        'PRIV-R001': 100, # SeDebugPrivilege — Mimikatz direct
-        'PRIV-R002': 100, # SeTcbPrivilege — Act as OS
-        'PRIV-R003':  40, # SeTakeOwnership étendu
-        'PRIV-R004':  35, # SeBackupPrivilege étendu — exfiltration SAM
-        'PRIV-R005': 100, # SeLoadDriverPrivilege — driver malveillant Ring 0
-        # ── Préférences registre (Registry.xml) ────────────────────────────────
-        'REGXML-001': 100, # Partages admin activés — Pass-the-Hash trivial
-        'REGXML-002':  80, # Token plein comptes locaux
-        'REGXML-003': 100, # UAC désactivé via préférences
-        'REGXML-004': 100, # WDigest activé via préférences
-        'REGXML-005':  70, # SMBv1 activé via préférences
-        'REGXML-006':  40, # Pare-feu désactivé via préférences
-        'REGXML-007':  30, # ScriptBlock Logging désactivé via préférences
-    }
+
 
     # Catégories de score (style PingCastle — score par domaine)
     CATEGORY_RULES = {
@@ -5186,9 +5496,10 @@ def analyze_gpos(gpos: list) -> dict:
                               'PRIV-R001','PRIV-R002','PRIV-R003','PRIV-R004','PRIV-R005',
                               'REGXML-001','REGXML-002','REGXML-003'],
         'Sécurité réseau':   ['SMB-001','LDAP-001','LDAP-002','NTLM-001','RDP-001',
-                              'SYS-001','SYS-002','REGXML-005','REGXML-006'],
-        'Correctifs & Conf.':['SYS-003','SYS-004','SYS-005','PRINT-001','LSA-001',
-                              'REGXML-007','PS-001'],
+                              'SYS-001','SYS-002','REGXML-005','REGXML-006','REGXML-008',
+                              'REGXML-012','REGXML-013'],
+        'Protection système':['SYS-003','SYS-004','SYS-005','PRINT-001','LSA-001',
+                              'REGXML-007','REGXML-009','REGXML-010','REGXML-011','PS-001'],
         'Audit & Traçabilité':['AUDIT-001','AUDIT-002','AUDIT-003','AUDIT-005',
                                'AUDIT-006','AUDIT-007','LOG-001'],
     }
@@ -6352,16 +6663,36 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
       </div>
       {% if data.gpo_conflicts %}
       {% for c in data.gpo_conflicts %}
-      <div class="conflict-card {% if c.is_security %}high{% else %}low{% endif %}" data-sec="{{ c.is_security|lower }}" data-txt="{{ c.label|lower }}">
+      <div class="conflict-card {% if c.is_security %}high{% else %}low{% endif %}" data-sec="{{ c.is_security|lower }}" data-txt="{{ c.key_short|lower }}">
         <div class="cc-head" onclick="togCC(this)">
-          <span style="font-size:11px">{% if c.is_security %}🔴{% else %}🟡{% endif %}</span>
-          <span class="cc-key">{{ c.section_label }} → {{ c.key_short }}</span>
+          <span style="font-size:11px">{% if c.contradiction %}⚠️{% elif c.is_security %}🔴{% else %}🟡{% endif %}</span>
+          <div style="flex:1;min-width:0">
+            <span class="cc-key">{{ c.section_label }} → {{ c.key_short }}</span>
+            {% if c.contradiction %}<span style="font-size:10px;color:var(--red);margin-left:8px;font-weight:600">CONTRADICTION SÉCURITÉ</span>{% endif %}
+          </div>
           <span style="font-size:10px;color:var(--txt3)">{{ c.gpo_count }} GPO</span>
           <span style="font-size:11px;color:var(--txt3);transition:transform .15s" class="cc-arr">▶</span>
         </div>
         <div class="cc-body">
-          <div class="cc-winner">✅ Gagnant : <strong style="cursor:pointer;color:var(--green)" onclick="openGPODetail('{{ c.winner.gpo_guid }}')">{{ c.winner.gpo_name }}</strong> → <code>{{ c.winner.value }}</code>{% if c.winner.enforced %} <span style="color:var(--red);font-size:10px">ENFORCED</span>{% endif %}</div>
+          {% if c.contradiction %}
+          <div style="margin-bottom:12px;padding:10px 14px;background:rgba(220,60,60,.08);border:1px solid rgba(220,60,60,.3);border-radius:6px">
+            <div style="font-size:12px;font-weight:600;color:var(--red);margin-bottom:6px">⚠ {{ c.contradiction.label }}</div>
+            <div style="font-size:11px;color:var(--txt2);line-height:1.6">{{ c.contradiction.danger }}</div>
+            <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">
+              <div style="font-size:11px;padding:4px 10px;background:var(--green-bg);border-radius:4px;color:var(--green)">
+                ✅ Valeur sûre : <strong>{{ c.contradiction.safe_gpo }}</strong> → <code>{{ c.contradiction.safe_val }}</code>
+              </div>
+              {% for u in c.contradiction.unsafe_gpos %}
+              <div style="font-size:11px;padding:4px 10px;background:var(--red-bg);border-radius:4px;color:var(--red)">
+                ❌ Valeur dangereuse : <strong>{{ u.name }}</strong> → <code>{{ u.value }}</code>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+          <div class="cc-winner">✅ Gagnant (priorité haute) : <strong style="cursor:pointer;color:var(--green)" onclick="openGPODetail('{{ c.winner.gpo_guid }}')">{{ c.winner.gpo_name }}</strong> → <code>{{ c.winner.value }}</code>{% if c.winner.enforced %} <span style="color:var(--red);font-size:10px">ENFORCED</span>{% endif %}</div>
           {% for l in c.losers %}<div class="cc-loser">❌ Écrasé : <strong style="cursor:pointer" onclick="openGPODetail('{{ l.gpo_guid }}')">{{ l.gpo_name }}</strong> → <code>{{ l.value }}</code></div>{% endfor %}
+          {% if not c.enforced_wins %}<div style="margin-top:8px;font-size:11px;color:var(--txt3);font-style:italic">⚠ Aucune GPO Enforced — l'ordre dépend de la profondeur des OU et de l'ordre des liens dans gPLink</div>{% endif %}
         </div>
       </div>
       {% endfor %}
