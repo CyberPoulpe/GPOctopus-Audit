@@ -6175,7 +6175,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
 
 <!-- ══ SIDEBAR ══════════════════════════════════════════════════════════════ -->
 <nav class="sidebar">
-  <div class="sb-logo">
+  <div class="sb-logo" style="cursor:pointer" onclick="switchTab('security');showSub('security','overview')" title="Retour à l'accueil">
     <h1>🐙 GPOctopus</h1>
     <p>{{ data.generated_at }} · {{ data.gpo_count }} GPO</p>
     <button id="global-back-btn" onclick="goBack()" title="Retour" style="display:none;margin-top:8px;width:100%;align-items:center;justify-content:center;gap:6px;padding:6px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--txt2);font-size:12px;cursor:pointer">
