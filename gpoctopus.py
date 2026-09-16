@@ -6,7 +6,6 @@ CIS Benchmarks · ANSSI · Microsoft Security Baseline
 
 Usage :
   python3 gpoctopus.py                          # wizard interactif
-  python3 gpoctopus.py --demo                   # mode démo sans AD
   python3 gpoctopus.py --dc 192.168.1.1 --domain corp.local --user admin --password 'P@ss!' -o rapport.html
 
 Dépendances :
@@ -458,21 +457,6 @@ AUDIT_RULES = [
         "remediation": "Valeur recommandée : 3 (Succès + Échec)\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Stratégies\n      └─ Paramètres Windows\n          └─ Paramètres de sécurité\n              └─ Stratégies locales\n                  └─ Stratégie d'audit\n                      └─ Auditer l'accès aux objets → Succès et Échec\n\n⚠ Activer l'audit sur les objets individuellement via leurs SACL (liste de contrôle d'accès\nsystème) — sinon aucun événement n'est généré même avec la stratégie activée.\nÉvénements : 4663 (accès fichier), 4657 (modification registre)",
     },
     {
-        "id": "AUDIT-005",
-        "title": "Audit avancé non prioritaire sur l'audit legacy",
-        "severity": "info",
-        "absent_sev": None,
-        "ref": "CIS 17.1.1 · ANSSI R-09",
-        "rec_value": "SCENoApplyLegacyAuditPolicy = 1",
-        "category": "Audit",
-        "check_key": "scenoapplylegacyauditpolicy",
-        "section": "registry_values",
-        "threshold": 1,
-        "operator": "ne",
-        "detail_ok": "Audit avancé prioritaire sur l'audit legacy",
-        "remediation": "Valeur recommandée : SCENoApplyLegacyAuditPolicy = 1\n\n📍 Chemin GPO (Configuration ordinateur) :\nConfiguration ordinateur\n  └─ Préférences\n      └─ Paramètres Windows\n          └─ Registre\n              Ruche  : HKEY_LOCAL_MACHINE\n              Chemin : SYSTEM\\CurrentControlSet\\Control\\Lsa\n              Valeur : SCENoApplyLegacyAuditPolicy\n              Type   : REG_DWORD\n              Données: 1\n\nPermet l'utilisation des stratégies d'audit avancées (audit.csv) sans conflit avec les\nparamètres d'audit legacy de la stratégie de sécurité.",
-    },
-    {
         "id": "AUDIT-006",
         "title": "Audit de l'utilisation des privilèges non configuré",
         "severity": "info",
@@ -480,7 +464,7 @@ AUDIT_RULES = [
         "ref": "CIS 17.8.1 · ANSSI R-09",
         "rec_value": "AuditPrivilegeUse = 1 (Succès minimum)",
         "category": "Audit",
-        "check_key": "auditprivilegeusse",
+        "check_key": "auditprivilegeuse",
         "section": "event_audit",
         "threshold": 0,
         "operator": "eq",
@@ -527,7 +511,7 @@ AUDIT_RULES = [
         "ref": "CIS 2.3.9.1 · ANSSI R-06 · MS Baseline v22H2",
         "rec_value": "MaxTicketAge ≤ 10 heures",
         "category": "Kerberos",
-        "check_key": "maxtickerage",
+        "check_key": "maxticketage",
         "section": "kerberos_policy",
         "threshold": 10,
         "operator": "gt",
@@ -2345,6 +2329,7 @@ def detect_gpo_conflicts(gpos: list) -> list:
             'value':     str(value).strip(),
             'enforced':  is_enforced,
             'ou_count':  len(gpo.get('links', [])),
+            'depth':     _gpo_max_depth(gpo),
         })
 
     for gpo in gpos:
@@ -2439,10 +2424,21 @@ def detect_gpo_conflicts(gpos: list) -> list:
         if len(conflict_values) < 2:
             continue   # Même valeur dans toutes les GPO → redondance, pas conflit
 
-        # Identifier la GPO gagnante (dernière dans la liste = priorité haute dans build_rsop)
-        # Parmi les GPO en conflit, la gagnante est celle avec enforced=True ou la dernière
+        # Identifier la GPO gagnante avec la MÊME logique de priorité que build_rsop :
+        #   - Enforced bat toujours non-Enforced.
+        #   - Entre GPO non-Enforced : l'OU la plus profonde (enfant) gagne.
+        #   - Entre GPO Enforced : c'est l'inverse — celle la plus proche de la
+        #     racine du domaine (profondeur la plus faible) gagne.
+        # Avant ce correctif, le gagnant était choisi par ordre d'arrivée LDAP
+        # (non pertinent), ce qui pouvait afficher une GPO "gagnante" différente
+        # de celle réellement appliquée par le RSOP.
+        def _priority_key(e):
+            if e['enforced']:
+                return (1, -e['depth'])
+            return (0, e['depth'])
+        unique_entries.sort(key=_priority_key)
+        winner = unique_entries[-1]
         enforced_entries = [e for e in unique_entries if e['enforced']]
-        winner = enforced_entries[-1] if enforced_entries else unique_entries[-1]
         losers = [e for e in unique_entries if e['gpo_guid'] != winner['gpo_guid']]
 
         # Évaluer si le conflit est une contradiction de sécurité
@@ -2582,7 +2578,7 @@ def build_search_index(gpos: list) -> list:
         'auditlogonevents':         'Audit connexions',
         'auditaccountmanage':       'Audit gestion comptes',
         'auditpolicychange':        'Audit changements stratégie',
-        'auditprivilegeusse':       'Audit utilisation privilèges',
+        'auditprivilegeuse':       'Audit utilisation privilèges',
         'auditsystemevents':        'Audit événements système',
         'uselogoncredential':       'WDigest (mots de passe en clair)',
         'smb1':                     'SMBv1',
@@ -2873,12 +2869,21 @@ def build_rsop(gpos: list) -> tuple[dict, list]:
     rsop_registry = {}       # Registry.pol : (key_lower, vname_lower) -> int/str
     rsop_registry_xml = {}   # Registry.xml : (hive\key_lower, name_lower) -> int/str
 
-    # Trier par priorité Windows réelle :
-    # GPO domaine (profondeur 0) → OU parente → OU enfant → Enforced (priorité max)
+    # Trier par priorité Windows réelle. Le merge plus bas applique "dernier gagne",
+    # donc l'ordre de la liste doit refléter l'ordre réel d'application AD :
+    #   1. GPO normales (non Enforced) : OU enfant > OU parente > domaine
+    #      → profondeur croissante, l'OU la plus profonde (child) est appliquée
+    #        en dernier et gagne, ce qui est le comportement standard.
+    #   2. GPO Enforced : c'est l'INVERSE — une GPO Enforced liée près de la
+    #      racine du domaine l'emporte sur une GPO Enforced liée à une OU
+    #      enfant, quelle que soit sa profondeur. Pour qu'elle "gagne" avec
+    #      notre logique "dernier gagne", elle doit donc être appliquée en
+    #      dernier → profondeur DÉCROISSANTE (la plus profonde d'abord, le
+    #      domaine racine en dernier).
     enforced_gpos = [g for g in gpos if any(l.get('enforced') for l in g.get('links', []))]
     normal_gpos   = [g for g in gpos if not any(l.get('enforced') for l in g.get('links', []))]
     normal_gpos.sort(key=_gpo_max_depth)
-    enforced_gpos.sort(key=_gpo_max_depth)
+    enforced_gpos.sort(key=_gpo_max_depth, reverse=True)
     ordered_gpos = normal_gpos + enforced_gpos  # dernier = priorité la plus haute
 
     for gpo in ordered_gpos:
@@ -3855,188 +3860,6 @@ class GPOCollector:
         return gpos
 
 
-
-# ─── Mode démo ──────────────────────────────────────────────────────────────
-
-def generate_demo_data() -> list:
-    return [
-        {
-            'name': 'Default Domain Policy',
-            'guid': '{31B2F340-016D-11D2-945F-00C04FB984F9}',
-            'sysvol_path': '', 'version': '5', 'flags': '0',
-            'created': '2020-01-15', 'changed': '2024-03-01',
-            'links': [{'ou': 'DC=corp,DC=local', 'flags': 0, 'enforced': False, 'disabled': False}],
-            'settings': {
-                'password_policy': {
-                    'minimumpasswordlength': '8',
-                    'passwordhistorysize': '5',
-                    'passwordcomplexity': '0',
-                    'maximumpasswordage': '42',
-                },
-                'system_access': {
-                    'lockoutbadcount': '0',
-                    'lockoutduration': '30',
-                    'nolmhash': '0',
-                    'lmcompatibilitylevel': '1',
-                    'restrictanonymous': '0',
-                    'enableguestaccount': '0',
-                },
-                'event_audit': {
-                    'auditlogonevents': '0',
-                    'auditaccountmanage': '0',
-                    'auditpolicychange': '0',
-                },
-            },
-            'registry_entries': [
-                (r'hklm\system\currentcontrolset\control\securityproviders\wdigest',
-                 'uselogoncredential', 4, 1),
-                (r'hklm\system\currentcontrolset\services\lanmanserver\parameters',
-                 'smb1', 4, 1),
-            ],
-        },
-        {
-            'name': 'GPO_Sécurité_Postes_WS2022',
-            'guid': '{A45E3C8D-1234-5678-ABCD-EF0123456789}',
-            'sysvol_path': '', 'version': '12', 'flags': '0',
-            'created': '2022-06-10', 'changed': '2025-01-15',
-            'links': [
-                {'ou': 'OU=Workstations,DC=corp,DC=local', 'flags': 0, 'enforced': False, 'disabled': False},
-                {'ou': 'OU=Laptops,DC=corp,DC=local', 'flags': 0, 'enforced': False, 'disabled': False},
-            ],
-            'settings': {
-                'password_policy': {
-                    'minimumpasswordlength': '16',
-                    'passwordhistorysize': '24',
-                    'passwordcomplexity': '1',
-                    'maximumpasswordage': '90',
-                },
-                'system_access': {
-                    'nolmhash': '1',
-                    'lmcompatibilitylevel': '5',
-                    'enableguestaccount': '0',
-                    'lockoutbadcount': '5',
-                    'lockoutduration': '30',
-                    'restrictanonymous': '1',
-                },
-                'event_audit': {
-                    'auditlogonevents': '3',
-                    'auditaccountmanage': '3',
-                    'auditpolicychange': '3',
-                },
-            },
-            'registry_entries': [
-                (r'hklm\software\policies\microsoft\windowsfirewall\domainprofile',
-                 'enablefirewall', 4, 1),
-                (r'hklm\software\microsoft\windows\currentversion\policies\explorer',
-                 'nodrivetypeautorun', 4, 255),
-                (r'hklm\system\currentcontrolset\control\deviceguard',
-                 'enablevirtualizationbasedsecurity', 4, 1),
-                (r'hklm\system\currentcontrolset\control\securityproviders\wdigest',
-                 'uselogoncredential', 4, 0),
-                (r'hklm\system\currentcontrolset\services\lanmanserver\parameters',
-                 'smb1', 4, 0),
-            ],
-            'printers': [
-                {'name': 'HP LaserJet Bureau', 'path': r'\\print01\HP-Bureau', 'action': 'U', 'default': True},
-                {'name': 'Ricoh Salle Reunion', 'path': r'\\print01\Ricoh-SR', 'action': 'U', 'default': False},
-            ],
-            'drives': [
-                {'letter': 'H', 'path': r'\\file01\homes\%username%', 'label': 'Mon dossier', 'action': 'U'},
-                {'letter': 'S', 'path': r'\\file01\shared', 'label': 'Partage commun', 'action': 'U'},
-            ],
-            'shortcuts_user': [
-                {'name': 'Intranet', 'target': 'https://intranet.corp.local', 'location': 'Bureau', 'action': 'C'},
-            ],
-            'scripts': {
-                'startup': [{'cmd': r'\\file01\scripts\map_drives.ps1', 'params': ''}],
-                'shutdown': [], 'logon': [], 'logoff': [],
-            },
-            'scheduled_tasks': [
-                {'name': 'Sauvegarde profil', 'cmd': 'robocopy.exe',
-                 'args': r'%USERPROFILE% \\backup01\profiles', 'user': 'SYSTEM', 'action': 'C'},
-            ],
-        },
-        {
-            'name': 'GPO_Désactivations_Legacy',
-            'guid': '{B12C4D5E-9876-5432-FEDC-BA9876543210}',
-            'sysvol_path': '', 'version': '3', 'flags': '0',
-            'created': '2019-03-20', 'changed': '2021-11-05',
-            'links': [{'ou': 'OU=Legacy,DC=corp,DC=local', 'flags': 0, 'enforced': False, 'disabled': False}],
-            'settings': {'password_policy': {}, 'system_access': {}, 'event_audit': {}},
-            'registry_entries': [
-                (r'hklm\software\policies\microsoft\windowsfirewall\domainprofile',
-                 'enablefirewall', 4, 0),  # Pare-feu OFF — mauvaise pratique
-            ],
-        },
-        {
-            'name': 'GPO_Chiffrement_BitLocker',
-            'guid': '{C23D5E6F-AAAA-BBBB-CCCC-DDDDEEEEFFFF}',
-            'sysvol_path': '', 'version': '8', 'flags': '0',
-            'created': '2023-01-10', 'changed': '2024-08-20',
-            'links': [{'ou': 'OU=Computers,DC=corp,DC=local', 'flags': 2, 'enforced': True, 'disabled': False}],
-            'settings': {'password_policy': {}, 'system_access': {}, 'event_audit': {}},
-            'registry_entries': [],
-        },
-        {
-            'name': 'GPO_Legacy_XP_Obsolete',
-            'guid': '{D34E6F70-1111-2222-3333-444455556666}',
-            'sysvol_path': '', 'version': '1', 'flags': '0',
-            'created': '2008-05-12', 'changed': '2010-02-01',
-            'links': [],  # Orpheline
-            'settings': {'password_policy': {}, 'system_access': {}, 'event_audit': {}},
-            'registry_entries': [],
-        },
-        # ── GPO générant des conflits démontrables ──
-        {
-            'name': 'GPO_Audit_Serveurs',
-            'guid': '{E45F7081-2222-3333-4444-555566667777}',
-            'sysvol_path': '', 'version': '4', 'flags': '0',
-            'created': '2021-09-01', 'changed': '2023-06-15',
-            'links': [{'ou': 'OU=Servers,DC=corp,DC=local', 'flags': 0, 'enforced': False, 'disabled': False}],
-            'settings': {
-                'password_policy': {
-                    # Conflit sécurité : longueur différente de Default Domain Policy (8) et GPO_Sécurité (16)
-                    'minimumpasswordlength': '12',
-                    'maximumpasswordage': '180',   # Conflit avec Default (42) et Sécurité (90)
-                },
-                'event_audit': {
-                    # Conflit audit : valeur différente de GPO_Sécurité_Postes (3)
-                    'auditlogonevents':   '1',    # Succès seulement vs Succès+Échec
-                    'auditaccountmanage': '2',    # Échec seulement
-                },
-                'system_access': {
-                    'lmcompatibilitylevel': '3',   # Conflit : Default=1, Sécurité=5, ici=3
-                    'lockoutbadcount': '15',        # Conflit : Default=0, Sécurité=5, ici=15
-                },
-            },
-            'registry_entries': [
-                # Conflit registre : pare-feu OFF ici vs ON dans GPO_Sécurité
-                (r'hklm\software\policies\microsoft\windowsfirewall\domainprofile',
-                 'enablefirewall', 4, 0),
-            ],
-        },
-        {
-            'name': 'GPO_Conformité_RGPD',
-            'guid': '{F5608892-3333-4444-5555-666677778888}',
-            'sysvol_path': '', 'version': '2', 'flags': '0',
-            'created': '2022-05-20', 'changed': '2022-11-30',
-            'links': [{'ou': 'OU=Workstations,DC=corp,DC=local', 'flags': 0, 'enforced': False, 'disabled': False}],
-            'settings': {
-                'password_policy': {
-                    # Conflit : encore une valeur différente pour minimumpasswordlength
-                    'minimumpasswordlength': '10',
-                    'passwordhistorysize': '12',    # Conflit avec Default (5) et Sécurité (24)
-                },
-                'system_access': {
-                    'lockoutduration': '5',         # Conflit : Sécurité=30, ici=5
-                    'nolmhash': '1',                # Pas de conflit (même valeur que Sécurité)
-                },
-            },
-            'registry_entries': [],
-        },
-    ]
-
-
 # ─── Analyse ─────────────────────────────────────────────────────────────────
 
 # Labels lisibles pour les clés GptTmpl.inf
@@ -4060,7 +3883,7 @@ _LABELS = {
     'auditlogonevents':         ('Audit connexions', '3=succès+échec'),
     'auditaccountmanage':       ('Audit gestion comptes', '3=succès+échec'),
     'auditpolicychange':        ('Audit changements stratégie', '3=succès+échec'),
-    'auditprivilegeusse':       ('Audit utilisation privilèges', ''),
+    'auditprivilegeuse':       ('Audit utilisation privilèges', ''),
     'auditsystemevents':        ('Audit événements système', ''),
     'auditobjectaccess':        ('Audit accès objets', ''),
     'auditaccountlogon':        ('Audit logon compte', ''),
@@ -4704,7 +4527,16 @@ def check_default_gpo_modifications(gpos: list) -> list:
         settings = gpo.get('settings', {})
         if guid == '{6AC1786C-016F-11D2-945F-00C04FB984F9}':
             allowed_sections = {'privilege_rights', 'event_audit', 'system_access', 'registry_values'}
+            # Sections de métadonnées / journaux présentes dans TOUT GptTmpl.inf —
+            # ce ne sont pas des paramètres "hors usage normal", donc on ne les
+            # signale jamais, quelle que soit la GPO par défaut concernée.
+            METADATA_SECTIONS = {
+                'unicode', 'version', 'signature', 'revision',
+                'security log', 'system log', 'application log',
+            }
             for section, params in settings.items():
+                if section in METADATA_SECTIONS:
+                    continue
                 if section not in allowed_sections and params and any(v for v in params.values() if v):
                     info = SETTINGS_MIGRATION.get(section, {
                         'gpo_name': 'O-Securite-Custom',
@@ -4716,13 +4548,15 @@ def check_default_gpo_modifications(gpos: list) -> list:
                         problematic_labels.append(f"{info['label']} ⚠ {info['warning']}")
                     else:
                         problematic_labels.append(info['label'])
+                        _params_items = [f"{k} = {v}" for k, v in list(params.items())[:8]]
                         migration_plan.append({
-                            'gpo_name': info['gpo_name'],
-                            'label':    info['label'],
-                            'scope':    info['scope'],
-                            'ou_link':  info['ou_link'],
-                            'params_list': [f"{k} = {v}" for k, v in list(params.items())[:5]],
-                            'count':    len(params),
+                            'gpo_name':    info['gpo_name'],
+                            'label':       info['label'],
+                            'scope':       info['scope'],
+                            'ou_link':     info['ou_link'],
+                            'items':       _params_items,
+                            'extra_count': max(0, len(params) - len(_params_items)),
+                            'count':       len(params),
                         })
 
         if problematic_labels:
@@ -4733,7 +4567,8 @@ def check_default_gpo_modifications(gpos: list) -> list:
                 if key not in merged_plan:
                     merged_plan[key] = dict(step)
                 else:
-                    merged_plan[key]['params_list'] += step['params_list']
+                    merged_plan[key]['items'] = merged_plan[key].get('items', []) + step.get('items', [])
+                    merged_plan[key]['extra_count'] = merged_plan[key].get('extra_count', 0) + step.get('extra_count', 0)
                     merged_plan[key]['count'] += step['count']
                     if step['label'] not in merged_plan[key]['label']:
                         merged_plan[key]['label'] += ' + ' + step['label']
@@ -6359,7 +6194,7 @@ mark{background:rgba(74,127,212,.25);color:var(--txt);border-radius:2px;padding:
                     {% if step.items %}
                     <div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--txt3);font-weight:600;margin-bottom:6px">Paramètres détectés à déplacer</div>
                     <div style="display:flex;flex-direction:column;gap:3px">
-                      {% for item in step.params_list %}
+                      {% for item in step.items %}
                       <div style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--txt2);padding:4px 10px;background:var(--surface);border-radius:3px;border:1px solid var(--border)">→ {{ item }}</div>
                       {% endfor %}
                       {% if step.extra_count is defined and step.extra_count > 0 %}
